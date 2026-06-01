@@ -16,3 +16,10 @@ __pycache__/
 
 # Temporary figure extractions.
 assets/paper_page*.png
+*.pyc
+logs/
+.venv/
+*.rendered.yaml
+
+# Keep the tracked LLaMA-Factory dataset registration (overrides *.json above)
+!configs/llamafactory/dataset_info.json
