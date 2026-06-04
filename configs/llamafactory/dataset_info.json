@@ -12,5 +12,22 @@
       "assistant_tag": "assistant",
       "system_tag": "system"
     }
+  },
+  "weasel_gemini_traj": {
+    "file_name": "weasel_gemini_traj.json",
+    "formatting": "sharegpt",
+    "columns": {
+      "messages": "messages",
+      "tools": "tools"
+    },
+    "tags": {
+      "role_tag": "role",
+      "content_tag": "content",
+      "user_tag": "user",
+      "assistant_tag": "assistant",
+      "system_tag": "system",
+      "observation_tag": "observation",
+      "function_tag": "function_call"
+    }
   }
 }

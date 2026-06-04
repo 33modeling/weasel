@@ -55,6 +55,41 @@ bash scripts/run_select.sh --gpus 0      # prepare_scores(GPU) -> select_greedy 
 ⚠️ `weasel/prune_axtree.py` is **missing from the upstream repo** (README: "added soon"),
 so `run_select.sh` scores un-pruned AXTrees. Use the pre-built file for paper-faithful inputs.
 
+### 2b. Use your own function-calling trajectories (Gemini / GPT exports)
+
+Locally-generated trajectories under `train_data/*.jsonl` (OpenAI function-calling
+schema: `{"tools":[...], "messages":[...]}`, optionally with `__source_*__` meta and
+`content` as plain strings *or* `[{"type":"text","text":...}]` blocks) can feed WEASEL
+via one converter that emits two shapes:
+
+```bash
+bash scripts/convert_traindata.sh        # converts every train_data/*.jsonl
+# -> $WEASEL_DATA/gemini_steps.jsonl  (a) and  gemini_traj.jsonl  (b)
+```
+
+* **(a) paper-faithful** — each trajectory is exploded into per-step ShareGPT records
+  (action serialized into assistant text, `## Goal/## AXTree/# Observation` markers
+  injected), so the **default** `prepare_scores` settings and `select_greedy` t0-per-
+  trajectory recipe apply unchanged:
+  ```bash
+  TRAIN_INPUT_JSON=$WEASEL_DATA/gemini_steps.jsonl bash scripts/run_select.sh --gpus 0
+  bash scripts/prepare_dataset.sh && bash scripts/run_train.sh --gpus 0   # dataset weasel_agenttrek
+  ```
+* **(b) real use** — each trajectory stays a single native function-calling record
+  (`function_call`/`observation` turns + `tools` column; registered as
+  `weasel_gemini_traj`). Apply WEASEL by mapping the steps it selected back to whole
+  trajectories:
+  ```bash
+  python -m weasel.select_trajectories \
+    --selected-dataset $WEASEL_TRAIN_JSON --traj-dataset $WEASEL_DATA/gemini_traj.jsonl \
+    --output $LLAMAFACTORY_DIR/data/weasel_gemini_traj.json
+  DATASET_NAME=weasel_gemini_traj bash scripts/run_train.sh --gpus 0
+  ```
+
+Multiple input files are concatenated with globally-unique `_traj_id`, so the Gemini
+and GPT-5.4-mini exports train as one pool. WEASEL groups steps by goal text; pass
+`--unique-goal` to `weasel.convert_gemini` to force one group per input line instead.
+
 ## 3. Train (LoRA SFT — the 8×A100 step)
 
 ```bash
