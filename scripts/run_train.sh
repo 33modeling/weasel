@@ -10,6 +10,12 @@
 #   MODELS="qwen25 qwen3" bash scripts/run_train.sh --gpus 0,1
 #   DS=1 bash scripts/run_train.sh --gpus 0,1,2,3             # add DeepSpeed ZeRO-2
 #
+# Data variant (separates checkpoints so full-data and WEASEL-subset don't clobber):
+#   bash scripts/run_train.sh --gpus 0                        # VARIANT=weasel (default), dataset=weasel_agenttrek
+#   VARIANT=full DATASET_NAME=weasel_gemini_full bash scripts/run_train.sh --gpus 0
+#   -> adapters in $OUTPUT_ROOT/<model>/<variant>. Carry the SAME VARIANT into
+#      run_merge.sh / serve_vllm.sh / run_eval.sh.
+#
 # Per-model recipe is paper-faithful (Table 9); global batch is held constant
 # regardless of GPU count by adjusting gradient_accumulation_steps.
 set -euo pipefail
@@ -26,15 +32,26 @@ PARALLEL=0
 DS=${DS:-0}
 PER_DEVICE=${PER_DEVICE:-1}
 CUTOFF=${CUTOFF:-8192}
+VARIANT=${VARIANT:-weasel}     # data variant -> checkpoints land in $OUTPUT_ROOT/<model>/<variant>
 while [ $# -gt 0 ]; do
   case "$1" in
     --parallel) PARALLEL=1; shift ;;
     --gpus) GPUS="$2"; shift 2 ;;  --gpus=*) GPUS="${1#*=}"; shift ;;
     --cutoff) CUTOFF="$2"; shift 2 ;; --cutoff=*) CUTOFF="${1#*=}"; shift ;;
+    --variant) VARIANT="$2"; shift 2 ;; --variant=*) VARIANT="${1#*=}"; shift ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "[warn] unknown arg: $1" >&2; shift ;;
   esac
 done
+
+# Default dataset per variant; override with DATASET_NAME (e.g. a full-data set).
+if [ -z "${DATASET_NAME:-}" ]; then
+  case "$VARIANT" in
+    weasel) DATASET_NAME="weasel_agenttrek" ;;
+    *) echo "[error] VARIANT=$VARIANT needs DATASET_NAME=<registered LLaMA-Factory dataset> " \
+            "(e.g. the full-data set). weasel variant defaults to weasel_agenttrek." >&2; exit 2 ;;
+  esac
+fi
 IFS=',' read -r -a _gpus_arr <<< "$GPUS"
 NPROC=${#_gpus_arr[@]}
 
@@ -56,12 +73,13 @@ fi
 
 mkdir -p logs
 echo "[run_train] MODELS=$MODELS  GPUS=$GPUS  NPROC=$NPROC  PARALLEL=$PARALLEL  DS=$DS  cutoff=$CUTOFF"
+echo "[run_train] VARIANT=$VARIANT  DATASET=$DATASET_NAME  -> checkpoints under \$OUTPUT_ROOT/<model>/$VARIANT"
 
 render_cfg() {  # $1=model  $2=ngpu_for_this_job   -> prints rendered yaml path
   local model="$1" ngpu="$2"
   read -r mpath template lr epochs gbatch <<< "$(model_spec "$model")"
   local accum=$(( gbatch / (ngpu * PER_DEVICE) )); [ "$accum" -lt 1 ] && accum=1
-  local out_dir="$OUTPUT_ROOT/$model/weasel"
+  local out_dir="$OUTPUT_ROOT/$model/$VARIANT"
   local cfg="$out_dir/train_config.rendered.yaml"
   mkdir -p "$out_dir"
   sed -e "s|@MODEL_PATH@|$mpath|g" \
@@ -111,5 +129,5 @@ if [ "$PARALLEL" = "1" ]; then
 else
   for model in $MODELS; do train_ddp "$model"; done
 fi
-echo "[run_train] done. adapters under $OUTPUT_ROOT/<model>/weasel"
-echo "[run_train] next: bash scripts/run_merge.sh"
+echo "[run_train] done. adapters under $OUTPUT_ROOT/<model>/$VARIANT"
+echo "[run_train] next: VARIANT=$VARIANT bash scripts/run_merge.sh"

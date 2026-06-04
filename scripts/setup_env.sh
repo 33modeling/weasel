@@ -63,10 +63,16 @@ export MODELS_DIR="${MODELS_DIR:-$WEASEL_WORK/models}"
 export MODEL_QWEN25_7B="${MODEL_QWEN25_7B:-$MODELS_DIR/Qwen2.5-7B-Instruct}"
 export MODEL_GEMMA3_4B="${MODEL_GEMMA3_4B:-$MODELS_DIR/gemma-3-4b-it}"
 export MODEL_QWEN3_8B="${MODEL_QWEN3_8B:-$MODELS_DIR/Qwen3-8B}"
+export MODEL_QWEN35_9B="${MODEL_QWEN35_9B:-$MODELS_DIR/Qwen3.5-9B}"
+export QWEN35_9B_TEMPLATE="${QWEN35_9B_TEMPLATE:-qwen3}"          # Qwen3.x chat template
 # HF repo ids used for download (only when the local dir above is missing).
 export HFID_QWEN25_7B="${HFID_QWEN25_7B:-Qwen/Qwen2.5-7B-Instruct}"
 export HFID_GEMMA3_4B="${HFID_GEMMA3_4B:-google/gemma-3-4b-it}"   # GATED on HF
 export HFID_QWEN3_8B="${HFID_QWEN3_8B:-Qwen/Qwen3-8B}"
+# Qwen3.5-9B repo id is a best guess — VERIFY/override (the model may be a local
+# checkpoint or not yet public): export HFID_QWEN35_9B=<org/repo>  (or set MODEL_QWEN35_9B
+# to an existing dir to skip the download entirely).
+export HFID_QWEN35_9B="${HFID_QWEN35_9B:-Qwen/Qwen3.5-9B}"
 
 # -----------------------------------------------------------------------------
 # Outputs (all on group-volume)

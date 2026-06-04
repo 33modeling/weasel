@@ -5,8 +5,11 @@
 #   bash scripts/run_eval.sh --bench miniwob                 # fully local, no docker/account
 #   bash scripts/run_eval.sh --bench workarena_l1            # needs ServiceNow dev instance
 #   bash scripts/run_eval.sh --bench webarena --n-jobs 4     # needs self-hosted WebArena (scripts/setup_webarena.sh)
+#   VARIANT=full bash scripts/run_eval.sh --bench miniwob    # eval the full-data model (must match serve_vllm)
 #
 # bench: miniwob | webarena | webarena_lite | workarena_l1 | workarena_l2
+# VARIANT (default weasel) routes results to $EVAL_RESULTS_ROOT/<variant>; set the
+# SAME VARIANT you served, so full-data vs WEASEL-subset success rates stay separate.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -16,21 +19,27 @@ fi
 weasel_activate eval
 
 BENCH="miniwob"; NJOBS=1; LIMIT=""
+VARIANT="${VARIANT:-weasel}"   # which data variant is being evaluated (must match serve_vllm)
 while [ $# -gt 0 ]; do
   case "$1" in
     --bench) BENCH="$2"; shift 2 ;; --bench=*) BENCH="${1#*=}"; shift ;;
     --n-jobs) NJOBS="$2"; shift 2 ;; --n-jobs=*) NJOBS="${1#*=}"; shift ;;
     --limit) LIMIT="$2"; shift 2 ;; --limit=*) LIMIT="${1#*=}"; shift ;;
+    --variant) VARIANT="$2"; shift 2 ;; --variant=*) VARIANT="${1#*=}"; shift ;;
     -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
     *) echo "[warn] unknown arg: $1" >&2; shift ;;
   esac
 done
 
+# Per-variant results dir so full-data and WEASEL-subset studies never mix
+# (summarize_results.py picks the newest study under the root it is given).
+RESULTS_DIR="$EVAL_RESULTS_ROOT/$VARIANT"
+
 # AgentLab reaches the served model over the OpenAI-compatible vLLM endpoint.
 export OPENAI_API_BASE="${OPENAI_API_BASE:-http://$VLLM_HOST:$VLLM_PORT/v1}"
 export OPENAI_BASE_URL="$OPENAI_API_BASE"
-export AGENTLAB_EXP_ROOT="$EVAL_RESULTS_ROOT"
-mkdir -p "$EVAL_RESULTS_ROOT" logs
+export AGENTLAB_EXP_ROOT="$RESULTS_DIR"
+mkdir -p "$RESULTS_DIR" logs
 
 # --- per-benchmark preconditions ---
 case "$BENCH" in
@@ -49,19 +58,19 @@ case "$BENCH" in
   *) echo "[error] unknown --bench: $BENCH" >&2; exit 2 ;;
 esac
 
-echo "[run_eval] bench=$BENCH  model=$VLLM_SERVED_NAME  endpoint=$OPENAI_API_BASE  n_jobs=$NJOBS"
+echo "[run_eval] bench=$BENCH  variant=$VARIANT  model=$VLLM_SERVED_NAME  endpoint=$OPENAI_API_BASE  n_jobs=$NJOBS"
 EXTRA=(); [ -n "$LIMIT" ] && EXTRA+=(--limit "$LIMIT")
 python scripts/agentlab_eval.py \
   --bench "$BENCH" \
   --model-name "$VLLM_SERVED_NAME" \
   --base-url "$OPENAI_API_BASE" \
   --n-jobs "$NJOBS" \
-  --out-root "$EVAL_RESULTS_ROOT" \
-  "${EXTRA[@]}" 2>&1 | tee "logs/eval_${BENCH}.log"
-echo "[run_eval] done. results under $EVAL_RESULTS_ROOT"
+  --out-root "$RESULTS_DIR" \
+  "${EXTRA[@]}" 2>&1 | tee "logs/eval_${VARIANT}_${BENCH}.log"
+echo "[run_eval] done. results under $RESULTS_DIR"
 
-# Summarize success rate from the study just produced (newest under the root).
+# Summarize success rate from the study just produced (newest under the variant root).
 echo "[run_eval] summarizing success rate..."
-python scripts/summarize_results.py --root "$EVAL_RESULTS_ROOT" \
-  --csv "logs/eval_${BENCH}_summary.csv" 2>&1 | tee -a "logs/eval_${BENCH}.log" || \
-  echo "[run_eval][warn] summary failed; results still under $EVAL_RESULTS_ROOT"
+python scripts/summarize_results.py --root "$RESULTS_DIR" \
+  --csv "logs/eval_${VARIANT}_${BENCH}_summary.csv" 2>&1 | tee -a "logs/eval_${VARIANT}_${BENCH}.log" || \
+  echo "[run_eval][warn] summary failed; results still under $RESULTS_DIR"

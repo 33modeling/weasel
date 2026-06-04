@@ -67,6 +67,17 @@ bash scripts/convert_traindata.sh        # converts every train_data/*.jsonl
 # -> $WEASEL_DATA/gemini_steps.jsonl  (a) and  gemini_traj.jsonl  (b)
 ```
 
+**Pick by purpose:**
+* **Evaluating on MiniWob++ (or any AgentLab benchmark)** → use **(a) paper-style
+  step selection**. The selection is the paper recipe, and the per-step ShareGPT
+  output trains/serves cleanly into the existing eval path. This is the path to use
+  when you want a benchmark success rate.
+* **Just training a model to use it** (your own harness, native tool-calling) →
+  use **(c) keep the original jsonl**: WEASEL still picks the subset, but the
+  selected trajectories stay in their original function-calling schema, unchanged.
+* **(b)** is the middle option — selection applied, re-emitted as LLaMA-Factory
+  native function-calling ShareGPT (`weasel_gemini_traj`).
+
 * **(a) paper-faithful** — each trajectory is exploded into per-step ShareGPT records
   (action serialized into assistant text, `## Goal/## AXTree/# Observation` markers
   injected), so the **default** `prepare_scores` settings and `select_greedy` t0-per-
@@ -113,7 +124,22 @@ bash scripts/run_train.sh --gpus 0,1,2 --parallel
 ```
 Recipe is paper-faithful (Table 9): LoRA rank 8 / alpha 8 / bf16; Qwen2.5-7B lr 2e-5 ×4ep,
 Gemma3-4B lr 2e-5 ×2ep, Qwen3-8B lr 1e-6 ×2ep. Global batch is held constant across GPU counts.
-Adapters → `$OUTPUT_ROOT/<model>/weasel`.
+
+**Where checkpoints go:** LoRA adapters (not full models) are written to
+`$OUTPUT_ROOT/<model>/<variant>/` — e.g. `…/checkpoints/qwen25/weasel/` — with one
+`checkpoint-*` per epoch (`save_strategy: epoch`), plus the rendered config
+`train_config.rendered.yaml` and `logs/train_<model>.log`.
+
+**Data variant (full vs WEASEL-subset):** `VARIANT` (default `weasel`) is the data
+tag threaded through train → merge → serve → eval so the two never clobber each other.
+The recipe is identical; **only the dataset differs** (paper's `+Full` vs `+Weasel`):
+```bash
+# WEASEL-subset (default)
+bash scripts/run_train.sh --gpus 0                                  # dataset weasel_agenttrek
+# Full data — register it first, then pass VARIANT + DATASET_NAME
+VARIANT=full DATASET_NAME=<your_full_dataset> bash scripts/run_train.sh --gpus 0
+```
+→ adapters land in `…/<model>/weasel/` vs `…/<model>/full/`.
 
 > Note: Qwen3-8B in the paper also uses **self-reasoning synthesis** (§2.5), which has
 > **no code in this repo**. Training Qwen3 here uses the same selected data without that
@@ -121,9 +147,17 @@ Adapters → `$OUTPUT_ROOT/<model>/weasel`.
 
 ## 4. Merge + serve
 
+`run_merge.sh` fuses the LoRA adapter back into the base model to produce a standalone
+fp16 model (vLLM can't serve a bare adapter):
+```
+$OUTPUT_ROOT/<model>/<variant>  (adapter) + base model
+   --(llamafactory-cli export)-->  $MERGED_ROOT/<model>/<variant>  (merged fp16, sharded)
+```
 ```bash
-bash scripts/run_merge.sh                  # LoRA -> merged fp16 under $MERGED_ROOT
-bash scripts/serve_vllm.sh qwen25 --gpus 0 # OpenAI-compatible endpoint on :8000 (leave running)
+bash scripts/run_merge.sh                  # VARIANT=weasel: …/merged/<model>/weasel
+bash scripts/serve_vllm.sh qwen25 --gpus 0 # serves that merged model on :8000 (leave running)
+# full-data variant — carry the SAME VARIANT:
+VARIANT=full bash scripts/run_merge.sh && VARIANT=full bash scripts/serve_vllm.sh qwen25 --gpus 0
 ```
 
 ## 5. Evaluate (zero-shot, in a second shell)
@@ -135,7 +169,13 @@ bash scripts/run_eval.sh --bench workarena_l1         # needs a free ServiceNow 
 HOST=<webarena-dns> bash scripts/setup_webarena.sh env && source $WEASEL_WORK/webarena_env.sh
 bash scripts/run_eval.sh --bench webarena --n-jobs 4  # needs self-hosted WebArena (docker / AWS AMI)
 ```
-Results → `$EVAL_RESULTS_ROOT`. The GPT success judges (WebArena) need `OPENAI_API_KEY`.
+Results → `$EVAL_RESULTS_ROOT/<variant>/`, with a per-run success-rate summary
+(`weasel_summary.json` + `logs/eval_<variant>_<bench>_summary.csv`). The GPT success
+judges (WebArena) need `OPENAI_API_KEY`. **Pass the SAME `VARIANT` you served** so
+full-data and WEASEL-subset success rates land in separate dirs:
+```bash
+VARIANT=full bash scripts/run_eval.sh --bench miniwob   # -> eval-results/full/
+```
 
 ### Benchmark difficulty
 | bench | local? | extra requirement |
@@ -151,9 +191,9 @@ Results → `$EVAL_RESULTS_ROOT`. The GPT success judges (WebArena) need `OPENAI
 ├── LLaMA-Factory/                 ← training engine
 ├── models/                        ← base checkpoints
 ├── data/                          ← AgentTrek + weasel_agenttrek_train_10k.json
-├── checkpoints/<model>/weasel/    ← OUTPUT_ROOT (LoRA adapters)
-├── merged/<model>/weasel/         ← merged fp16 for serving
-├── eval-results/                  ← AgentLab study outputs
+├── checkpoints/<model>/<variant>/ ← OUTPUT_ROOT (LoRA adapters; variant=weasel|full|…)
+├── merged/<model>/<variant>/      ← merged fp16 for serving
+├── eval-results/<variant>/        ← AgentLab study outputs + success-rate summary
 └── cache/huggingface, cache/ms-playwright
 ~/weasel/                          ← this code checkout (user-volume)
 ```
