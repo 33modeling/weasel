@@ -66,7 +66,7 @@ render_cfg() {  # $1=model  $2=ngpu_for_this_job   -> prints rendered yaml path
   mkdir -p "$out_dir"
   sed -e "s|@MODEL_PATH@|$mpath|g" \
       -e "s|@TEMPLATE@|$template|g" \
-      -e "s|@DATASET@|weasel_agenttrek|g" \
+      -e "s|@DATASET@|${DATASET_NAME:-weasel_agenttrek}|g" \
       -e "s|@DATASET_DIR@|$LLAMAFACTORY_DIR/data|g" \
       -e "s|@CUTOFF@|$CUTOFF|g" \
       -e "s|@OUTPUT_DIR@|$out_dir|g" \
