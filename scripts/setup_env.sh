@@ -97,6 +97,21 @@ export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-$HF_HOME/transformers}"
 # Playwright (browsergym) browser binaries are ~400MB -> group-volume too.
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$WEASEL_WORK/cache/ms-playwright}"
 
+# Extra shared libs for Chromium when `playwright install-deps` can't run (no root).
+# Point WEASEL_XLIBS_DIR at a lib dir holding the missing libs (e.g. X11 libs you
+# installed without root via `conda create -n weasel-xlibs -c conda-forge \
+# xorg-libxcomposite xorg-libxdamage xorg-libxrandr`). If unset, auto-detect a
+# conda env named 'weasel-xlibs'. Only applied when the dir actually exists, so on
+# a VM that already has the libs this is a harmless no-op.
+if [ -z "${WEASEL_XLIBS_DIR:-}" ] && command -v conda >/dev/null 2>&1; then
+  _wx="$(conda env list 2>/dev/null | awk '/weasel-xlibs/{print $NF}')"
+  [ -n "$_wx" ] && [ -d "$_wx/lib" ] && WEASEL_XLIBS_DIR="$_wx/lib"
+  unset _wx
+fi
+if [ -n "${WEASEL_XLIBS_DIR:-}" ] && [ -d "$WEASEL_XLIBS_DIR" ]; then
+  export LD_LIBRARY_PATH="$WEASEL_XLIBS_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
 # -----------------------------------------------------------------------------
 # HF token (for gated google/gemma-3-4b-it). Pick ONE:
 #   1) [BEST] huggingface-cli login   (writes ~/.huggingface/token; no env var)
