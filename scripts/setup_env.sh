@@ -68,6 +68,18 @@ export HFID_QWEN25_7B="${HFID_QWEN25_7B:-Qwen/Qwen2.5-7B-Instruct}"
 export HFID_GEMMA3_4B="${HFID_GEMMA3_4B:-google/gemma-3-4b-it}"   # GATED on HF
 export HFID_QWEN3_8B="${HFID_QWEN3_8B:-Qwen/Qwen3-8B}"
 
+# --- Experiment model (exp1 full-data vs exp2 weasel-subset) ---
+# "qwen3.5-9b": set MODEL_QWEN35_9B to your /group-volume checkpoint dir.
+# Confirm the chat template (Qwen3.x -> 'qwen3'); change if your model differs.
+export MODEL_QWEN35_9B="${MODEL_QWEN35_9B:-$MODELS_DIR/Qwen3.5-9B}"
+export QWEN35_9B_TEMPLATE="${QWEN35_9B_TEMPLATE:-qwen3}"
+
+# --- NEW experiment dataset (NOT AgentTrek; you provide it) ---
+export NEWDATA_RAW="${NEWDATA_RAW:-$WEASEL_DATA/newdata/raw.jsonl}"               # dataset as given
+export NEWDATA_FULL_JSON="${NEWDATA_FULL_JSON:-$WEASEL_DATA/newdata/full.json}"   # converted (messages schema) — exp1 input
+export NEWDATA_WEASEL_JSON="${NEWDATA_WEASEL_JSON:-$WEASEL_DATA/newdata/weasel_subset.json}"  # after selection — exp2 input
+export EXP_OUTPUT_ROOT="${EXP_OUTPUT_ROOT:-$WEASEL_WORK/experiments}"             # exp checkpoints/merged/results
+
 # -----------------------------------------------------------------------------
 # Outputs (all on group-volume)
 # -----------------------------------------------------------------------------
@@ -134,9 +146,10 @@ export MKL_NUM_THREADS="${MKL_NUM_THREADS:-16}"
 # -----------------------------------------------------------------------------
 # Create output dirs (idempotent)
 # -----------------------------------------------------------------------------
-mkdir -p "$WEASEL_WORK" "$WEASEL_DATA" "$MODELS_DIR" "$OUTPUT_ROOT" "$MERGED_ROOT" \
-         "$EVAL_RESULTS_ROOT" "$HF_HOME" "$HF_DATASETS_CACHE" "$HF_HUB_CACHE" \
-         "$TRANSFORMERS_CACHE" "$PLAYWRIGHT_BROWSERS_PATH" "$WEASEL_REPO/logs" \
+mkdir -p "$WEASEL_WORK" "$WEASEL_DATA" "$WEASEL_DATA/newdata" "$MODELS_DIR" \
+         "$OUTPUT_ROOT" "$MERGED_ROOT" "$EXP_OUTPUT_ROOT" "$EVAL_RESULTS_ROOT" \
+         "$HF_HOME" "$HF_DATASETS_CACHE" "$HF_HUB_CACHE" "$TRANSFORMERS_CACHE" \
+         "$PLAYWRIGHT_BROWSERS_PATH" "$WEASEL_REPO/logs" \
          2>/dev/null || true
 
 # -----------------------------------------------------------------------------
