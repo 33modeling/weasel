@@ -18,9 +18,10 @@ VARIANT=${VARIANT:-weasel}     # which data variant's adapter to merge
 
 base_and_template() {
   case "$1" in
-    qwen25) echo "$MODEL_QWEN25_7B qwen" ;;
-    gemma3) echo "$MODEL_GEMMA3_4B gemma3" ;;
-    qwen3)  echo "$MODEL_QWEN3_8B qwen3" ;;
+    qwen25)    echo "$MODEL_QWEN25_7B qwen" ;;
+    gemma3)    echo "$MODEL_GEMMA3_4B gemma3" ;;
+    qwen3)     echo "$MODEL_QWEN3_8B qwen3" ;;
+    qwen35_9b) echo "$MODEL_QWEN35_9B $QWEN35_9B_TEMPLATE" ;;
     *) return 1 ;;
   esac
 }

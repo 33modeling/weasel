@@ -43,9 +43,17 @@ want different transformers — one env would conflict.)
 ## 2. Get models + data
 
 ```bash
-bash scripts/download_models.sh all      # Qwen2.5-7B-Instruct, Qwen3-8B, gemma-3-4b-it (gated)
+bash scripts/download_models.sh all      # Qwen2.5-7B-Instruct, Qwen3-8B, gemma-3-4b-it (gated), Qwen3.5-9B
 bash scripts/download_data.sh            # pre-built WEASEL-selected 10K (fast path, recommended)
 ```
+Single model: `download_models.sh {qwen25_7b|gemma3_4b|qwen3_8b|qwen35_9b}`.
+
+> **Qwen3.5-9B (`qwen35_9b`)** uses `HFID_QWEN35_9B` (best-guess `Qwen/Qwen3.5-9B`)
+> and `MODEL_QWEN35_9B` (default `$MODELS_DIR/Qwen3.5-9B`). **Verify the repo id** —
+> if it's wrong or the model isn't public, either `export HFID_QWEN35_9B=<org/repo>`
+> or point `MODEL_QWEN35_9B` at an existing local checkpoint dir (a present
+> `config.json` makes the download a no-op). Chat template defaults to
+> `QWEN35_9B_TEMPLATE=qwen3` — override if your checkpoint differs.
 
 **(Optional)** re-run selection from raw AgentTrek instead of the pre-built file:
 ```bash
@@ -124,6 +132,24 @@ bash scripts/run_train.sh --gpus 0,1,2 --parallel
 ```
 Recipe is paper-faithful (Table 9): LoRA rank 8 / alpha 8 / bf16; Qwen2.5-7B lr 2e-5 ×4ep,
 Gemma3-4B lr 2e-5 ×2ep, Qwen3-8B lr 1e-6 ×2ep. Global batch is held constant across GPU counts.
+
+**Model keys** (`MODELS=` selects which to run; default `qwen25 gemma3 qwen3`):
+
+| key | base | template | lr / epochs / global-batch |
+|---|---|---|---|
+| `qwen25` | Qwen2.5-7B-Instruct | qwen | 2e-5 / 4 / 8 |
+| `gemma3` | gemma-3-4b-it | gemma3 | 2e-5 / 2 / 16 |
+| `qwen3` | Qwen3-8B | qwen3 | 1e-6 / 2 / 8 |
+| `qwen35_9b` | Qwen3.5-9B | `$QWEN35_9B_TEMPLATE` (qwen3) | 1e-6 / 2 / 8 — inherits the Qwen3-8B recipe; tune in `model_spec` if needed |
+
+`qwen35_9b` is **not** in the default set — run it explicitly (same for merge/serve):
+```bash
+MODELS="qwen35_9b" bash scripts/run_train.sh --gpus 0
+MODELS="qwen35_9b" bash scripts/run_merge.sh
+bash scripts/serve_vllm.sh qwen35_9b --gpus 0
+# full-data vs WEASEL-subset for this model:
+VARIANT=full DATASET_NAME=<full_dataset> MODELS="qwen35_9b" bash scripts/run_train.sh --gpus 0
+```
 
 **Where checkpoints go:** LoRA adapters (not full models) are written to
 `$OUTPUT_ROOT/<model>/<variant>/` — e.g. `…/checkpoints/qwen25/weasel/` — with one

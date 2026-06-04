@@ -58,9 +58,10 @@ NPROC=${#_gpus_arr[@]}
 # Per-model: <base-model path> <chat template> <lr> <epochs> <global-batch>
 model_spec() {
   case "$1" in
-    qwen25) echo "$MODEL_QWEN25_7B qwen 2.0e-5 4.0 8" ;;
-    gemma3) echo "$MODEL_GEMMA3_4B gemma3 2.0e-5 2.0 16" ;;
-    qwen3)  echo "$MODEL_QWEN3_8B qwen3 1.0e-6 2.0 8" ;;
+    qwen25)    echo "$MODEL_QWEN25_7B qwen 2.0e-5 4.0 8" ;;
+    gemma3)    echo "$MODEL_GEMMA3_4B gemma3 2.0e-5 2.0 16" ;;
+    qwen3)     echo "$MODEL_QWEN3_8B qwen3 1.0e-6 2.0 8" ;;
+    qwen35_9b) echo "$MODEL_QWEN35_9B $QWEN35_9B_TEMPLATE 1.0e-6 2.0 8" ;;  # paper Qwen3-8B recipe; tune if needed
     *) return 1 ;;
   esac
 }
