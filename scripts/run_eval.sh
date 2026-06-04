@@ -59,3 +59,9 @@ python scripts/agentlab_eval.py \
   --out-root "$EVAL_RESULTS_ROOT" \
   "${EXTRA[@]}" 2>&1 | tee "logs/eval_${BENCH}.log"
 echo "[run_eval] done. results under $EVAL_RESULTS_ROOT"
+
+# Summarize success rate from the study just produced (newest under the root).
+echo "[run_eval] summarizing success rate..."
+python scripts/summarize_results.py --root "$EVAL_RESULTS_ROOT" \
+  --csv "logs/eval_${BENCH}_summary.csv" 2>&1 | tee -a "logs/eval_${BENCH}.log" || \
+  echo "[run_eval][warn] summary failed; results still under $EVAL_RESULTS_ROOT"
