@@ -86,6 +86,19 @@ bash scripts/convert_traindata.sh        # converts every train_data/*.jsonl
   DATASET_NAME=weasel_gemini_traj bash scripts/run_train.sh --gpus 0
   ```
 
+* **(c) keep the original jsonl** — selection only, **no reformat**. WEASEL still
+  scores the step projection (a), but the selected trajectories are re-emitted in
+  their *original* function-calling schema (`tools`/`messages`/`tool_calls`/
+  `reasoning_content`/`__source__`), so you can train them with your own harness:
+  ```bash
+  python -m weasel.select_trajectories \
+    --selected-dataset $WEASEL_TRAIN_JSON \
+    --original-input train_data/*.jsonl \
+    --original-output $WEASEL_DATA/selected_original.jsonl
+  ```
+  `_traj_id` is the running record index convert_gemini assigned, so pass the **same
+  files in the same order** here (and don't convert with `--limit`, which is debug-only).
+
 Multiple input files are concatenated with globally-unique `_traj_id`, so the Gemini
 and GPT-5.4-mini exports train as one pool. WEASEL groups steps by goal text; pass
 `--unique-goal` to `weasel.convert_gemini` to force one group per input line instead.
