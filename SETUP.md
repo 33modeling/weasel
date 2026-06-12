@@ -57,10 +57,10 @@ Single model: `download_models.sh {qwen25_7b|gemma3_4b|qwen3_8b|qwen35_9b}`.
 **(Optional)** re-run selection from raw AgentTrek instead of the pre-built file:
 ```bash
 bash scripts/download_data.sh agenttrek  # download + convert raw pool
-bash scripts/run_select.sh --gpus 0      # prepare_scores(GPU) -> select_greedy -> postprocess
+bash scripts/run_select.sh --gpus 0      # prune_axtree -> prepare_scores(GPU) -> select_greedy -> postprocess
 ```
-⚠️ `weasel/prune_axtree.py` is **missing from the upstream repo** (README: "added soon"),
-so `run_select.sh` scores un-pruned AXTrees. Use the pre-built file for paper-faithful inputs.
+Paper step 0 (`weasel.prune_axtree`, target-centered AXTree pruning) runs by default;
+`PRUNE=0` skips it, `WINDOW`/`FALLBACK` override the pruning knobs (defaults 60/120).
 
 ### 2b. Use your own function-calling trajectories (Gemini / GPT exports)
 

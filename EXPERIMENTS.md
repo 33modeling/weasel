@@ -54,9 +54,10 @@ bash scripts/run_experiment.sh --exp weasel --gpus 0,1,2,3,4,5,6,7
 # -> run_select on the full data -> subset -> LoRA -> merge -> serve -> MiniWob
 #    SR/results: $EXP_OUTPUT_ROOT/weasel/qwen35_9b/eval/weasel
 ```
-`run_experiment.sh` reuses `scripts/run_select.sh` (prepare_scores→select_greedy→
-postprocess) for selection and `scripts/run_eval.sh` + `scripts/agentlab_eval.py`
-(the existing benchmark) for SR.
+`run_experiment.sh` reuses `scripts/run_select.sh` (prune_axtree→prepare_scores→
+select_greedy→postprocess) for selection and `scripts/run_eval.sh` +
+`scripts/agentlab_eval.py` (the existing benchmark) for SR. Pruning is a no-op
+for data without `## AXTree:` sections; `PRUNE=0` disables it explicitly.
 
 ## Caveats
 - **MiniWob is a smoke test.** The benchmark for the new dataset still needs design

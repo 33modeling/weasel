@@ -2,17 +2,20 @@
 # Re-run the WEASEL data-selection pipeline from raw trajectories.
 # (Skip this entirely if you used scripts/download_data.sh prebuilt.)
 #
-#   prepare_scores  -> goals_with_scores.json   (GPU: BERTScore roberta-large)
-#   select_greedy   -> selected_indices.json    (CPU, stdlib)
-#   postprocess     -> weasel_*_train_10k.json  (CPU, stdlib)
+#   prune_axtree    -> *_pruned.json             (CPU, regex; paper step 0 — PRUNE=0 skips)
+#   prepare_scores  -> goals_with_scores.json    (GPU: BERTScore roberta-large)
+#   select_greedy   -> selected_indices.json     (CPU, stdlib)
+#   postprocess     -> weasel_*_train_10k.json   (CPU, stdlib)
 #
-# NOTE: README step 0 'weasel.prune_axtree' is NOT in the repo, so this skips
-# pruning and scores the AXTrees as-is. On A100 80GB that is fine (just more
-# tokens); results won't be byte-identical to the paper's pruned inputs.
+# Pruning rewrites each example's AXTree in place (record count/order preserved,
+# so selected indices stay aligned with the unpruned original); examples without
+# an '## AXTree:' section pass through untouched.
 #
 # Usage:
 #   bash scripts/run_select.sh --gpus 0
 #   T0=3 LAMBDA=1.0 BATCH=64 bash scripts/run_select.sh --gpus 0
+#   PRUNE=0 bash scripts/run_select.sh --gpus 0          # score unpruned AXTrees
+#   WINDOW=60 FALLBACK=120 bash scripts/run_select.sh --gpus 0
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -25,6 +28,9 @@ GPUS="${GPUS:-0}"
 T0="${T0:-3}"                 # paper default per-trajectory budget
 LAMBDA="${LAMBDA:-1.0}"       # paper default importance/diversity tradeoff
 BATCH="${BATCH:-64}"          # A100 80GB: 64 is safe for roberta-large; lower if OOM
+PRUNE="${PRUNE:-1}"           # paper step 0 (target-centered AXTree pruning)
+WINDOW="${WINDOW:-60}"        # bid entries kept on each side of the target bid
+FALLBACK="${FALLBACK:-120}"   # prefix bids kept when no valid target bid
 INPUT="${TRAIN_INPUT_JSON}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -44,11 +50,23 @@ fi
 
 mkdir -p logs "$WEASEL_DATA"
 LOG="logs/run_select.log"
-echo "[run_select] input=$INPUT  T0=$T0  lambda=$LAMBDA  batch=$BATCH  gpu=$FIRST_GPU" | tee "$LOG"
+echo "[run_select] input=$INPUT  T0=$T0  lambda=$LAMBDA  batch=$BATCH  gpu=$FIRST_GPU  prune=$PRUNE" | tee "$LOG"
+
+SELECT_INPUT="$INPUT"
+if [ "$PRUNE" = "1" ]; then
+  PRUNED_JSON="$WEASEL_DATA/$(basename "$INPUT" | sed 's/\.[^.]*$//')_pruned.json"
+  echo "=== 0/3 prune_axtree (CPU) -> $PRUNED_JSON ===" | tee -a "$LOG"
+  python -m weasel.prune_axtree \
+    --input "$INPUT" \
+    --output "$PRUNED_JSON" \
+    --window-size "$WINDOW" --fallback-threshold "$FALLBACK" \
+    --stats-output "${PRUNED_JSON%.json}_stats.json" 2>&1 | tee -a "$LOG"
+  SELECT_INPUT="$PRUNED_JSON"
+fi
 
 echo "=== 1/3 prepare_scores (GPU $FIRST_GPU) ===" | tee -a "$LOG"
 CUDA_VISIBLE_DEVICES="$FIRST_GPU" python -m weasel.prepare_scores \
-  --input "$INPUT" \
+  --input "$SELECT_INPUT" \
   --output "$GOALS_SCORES_JSON" \
   --augmented-dataset-output "$WEASEL_DATA/train_with_phi_scores.json" \
   --batch-size "$BATCH" 2>&1 | tee -a "$LOG"
@@ -61,7 +79,7 @@ python -m weasel.select_greedy \
 
 echo "=== 3/3 postprocess_dataset (CPU) -> $WEASEL_TRAIN_JSON ===" | tee -a "$LOG"
 python -m weasel.postprocess_dataset \
-  --dataset "$INPUT" \
+  --dataset "$SELECT_INPUT" \
   --selected-indices "$SELECTED_INDICES_JSON" \
   --output "$WEASEL_TRAIN_JSON" \
   --max-user-chars 40000 --max-examples 10000 --seed 0 2>&1 | tee -a "$LOG"
