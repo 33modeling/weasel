@@ -73,15 +73,17 @@ Scripts (mirror the conventions of our `tads/scripts`):
 
 ## 0. AXTree Pruning
 
-We use target-centered AXTree pruning before score computation. The cleaned
-pruning script will be added soon. **It is not yet in this repository**, so
-`scripts/run_select.sh` skips pruning and scores the AXTrees as-is; use the
-pre-built `weasel_agenttrek_train_10k.json` above for paper-faithful inputs.
+We use target-centered AXTree pruning before score computation, with a
+threshold-based fallback when the action does not reference a valid bid.
+On the cluster, `scripts/run_select.sh` runs this as step 0 by default
+(`PRUNE=0` skips it; `WINDOW`/`FALLBACK` override the two knobs below).
 
 ```bash
 python -m weasel.prune_axtree \
   --input path/to/train.json \
-  --output path/to/train_pruned.json
+  --output path/to/train_pruned.json \
+  --window-size 60 \
+  --fallback-threshold 120
 ```
 
 ## 1. Prepare Scores
@@ -126,12 +128,12 @@ After building the WEASEL-selected training file, you can use it as the training
 dataset in a LLaMA-Factory SFT run. On a cluster, `scripts/run_train.sh` wraps
 this (LoRA rank 8 / alpha 8 / bf16; per-model lr and epochs follow the paper).
 
-If you want to directly use our trained model checkpoints, they will be available
-here:
+If you want to directly use our trained model checkpoints, they are available in
+the [WEASEL Hugging Face collection](https://huggingface.co/collections/yeonjooooni/weasel):
 
-- Qwen2.5-7B-Instruct WEASEL checkpoint: TODO
-- Gemma3-4B-IT WEASEL checkpoint: TODO
-- Qwen3-8B WEASEL checkpoint: TODO
+- Qwen2.5-7B-Instruct WEASEL checkpoint
+- Gemma3-4B-IT WEASEL checkpoint
+- Qwen3-8B WEASEL checkpoint
 
 ## Evaluation
 
