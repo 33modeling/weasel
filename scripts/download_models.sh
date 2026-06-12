@@ -7,13 +7,13 @@
 #
 # google/gemma-3-4b-it is GATED: run `huggingface-cli login` and accept the
 # license at https://huggingface.co/google/gemma-3-4b-it first.
-# qwen35_9b uses HFID_QWEN35_9B (best-guess 'Qwen/Qwen3.5-9B') — verify/override it,
-# or point MODEL_QWEN35_9B at an existing local checkpoint dir to skip the download.
+# qwen35_9b downloads HFID_QWEN35_9B (default 'Qwen/Qwen3.5-9B', verified on HF);
+# point MODEL_QWEN35_9B at an existing local checkpoint dir to skip the download.
 # Skips any model whose target dir already has a config.json.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if [ -z "${MODELS_DIR:-}" ]; then
+if [ -z "${MODELS_DIR:-}" ] || ! type weasel_activate >/dev/null 2>&1; then
   echo "Sourcing scripts/setup_env.sh..."; source scripts/setup_env.sh
 fi
 weasel_activate select 2>/dev/null || weasel_activate train 2>/dev/null || true
@@ -29,8 +29,10 @@ _fetch() {  # $1 = HF repo id   $2 = local dir
   fi
   echo "[fetch] $repo -> $dest"
   mkdir -p "$dest"
+  # fallback `hf` (hub >= 1.0, Typer CLI) takes ONE pattern per --exclude flag
   huggingface-cli download "$repo" --local-dir "$dest" \
-    --exclude "*.pth" "original/*" || hf download "$repo" --local-dir "$dest"
+    --exclude "*.pth" "original/*" || \
+    hf download "$repo" --local-dir "$dest" --exclude "*.pth" --exclude "original/*"
   echo "[done] $repo"
 }
 
@@ -42,7 +44,7 @@ case "$WHAT" in
   all)
     _fetch "$HFID_QWEN25_7B" "$MODEL_QWEN25_7B"
     _fetch "$HFID_QWEN3_8B"  "$MODEL_QWEN3_8B"
-    _fetch "$HFID_QWEN35_9B" "$MODEL_QWEN35_9B"   # repo id is a best guess — verify HFID_QWEN35_9B
+    _fetch "$HFID_QWEN35_9B" "$MODEL_QWEN35_9B"
     _fetch "$HFID_GEMMA3_4B" "$MODEL_GEMMA3_4B"   # gated; needs HF login
     ;;
   *) echo "usage: bash scripts/download_models.sh {all|qwen25_7b|gemma3_4b|qwen3_8b|qwen35_9b}" >&2; exit 2 ;;

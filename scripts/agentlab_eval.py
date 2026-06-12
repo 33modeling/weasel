@@ -21,7 +21,7 @@ import sys
 BENCH_TO_BROWSERGYM = {
     "miniwob": "miniwob",
     "webarena": "webarena",
-    "webarena_lite": "webarena",   # WebArena-Lite = the 165-task subset; filtered below if supported
+    "webarena_lite": "webarena",   # WebArena-Lite = official 165-task subset; filtered via _filter_webarena_lite
     "workarena_l1": "workarena_l1",
     "workarena_l2": "workarena_l2",
 }
@@ -57,6 +57,43 @@ def build_agent_args(model_name: str, base_url: str):
     return GenericAgentArgs(chat_model_args=chat_model_args, flags=FLAGS_GPT_4o)
 
 
+def _filter_webarena_lite(study) -> None:
+    """Keep only the official WebArena-Lite task subset (165 ids).
+
+    Reads one task id per line ('123' or 'webarena.123', '#' comments allowed) from
+    $WEBARENA_LITE_TASKS or configs/webarena_lite_tasks.txt. Aborts when the list is
+    missing or nothing matches — running full WebArena under a 'lite' label would
+    silently misreport the SR.
+    """
+    list_path = os.environ.get("WEBARENA_LITE_TASKS", "configs/webarena_lite_tasks.txt")
+    if not os.path.isfile(list_path):
+        sys.exit(
+            "[agentlab_eval] --bench webarena_lite needs the official 165-task id list.\n"
+            f"  Put one task id per line in {list_path} (or set WEBARENA_LITE_TASKS=<file>);\n"
+            "  the list ships with the WebArena-Lite release (e.g. THUDM/WebRL).\n"
+            "  Use --bench webarena to run the full 812-task set instead."
+        )
+    wanted = set()
+    with open(list_path) as fh:
+        for line in fh:
+            tid = line.split("#", 1)[0].strip()
+            if tid:
+                wanted.add(tid if "." in tid else f"webarena.{tid}")
+    try:
+        before = len(study.exp_args_list)
+        study.exp_args_list = [
+            ea for ea in study.exp_args_list
+            if getattr(ea.env_args, "task_name", "") in wanted
+        ]
+    except Exception as e:
+        sys.exit(f"[agentlab_eval] cannot filter tasks on this AgentLab version ({e}); "
+                 "use --bench webarena or adapt the AGENTLAB-VERSION-SENSITIVE block.")
+    if not study.exp_args_list:
+        sys.exit(f"[agentlab_eval] webarena_lite: 0 of {before} tasks matched {list_path} — "
+                 "check the id format (expected '123' or 'webarena.123').")
+    print(f"[agentlab_eval] webarena_lite: kept {len(study.exp_args_list)}/{before} tasks")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--bench", required=True, choices=list(BENCH_TO_BROWSERGYM))
@@ -80,6 +117,9 @@ def main() -> int:
     print(f"[agentlab_eval] bench={args.bench} (browsergym='{benchmark}') "
           f"model={args.model_name} endpoint={args.base_url} n_jobs={args.n_jobs}")
     study = make_study(benchmark=benchmark, agent_args=[agent_args], comment=f"weasel-{args.bench}")
+
+    if args.bench == "webarena_lite":
+        _filter_webarena_lite(study)
 
     # Optional task cap for a smoke test (attribute name varies; best-effort).
     if args.limit is not None:

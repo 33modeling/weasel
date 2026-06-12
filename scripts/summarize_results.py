@@ -66,7 +66,7 @@ def task_name(exp_dir: Path) -> str:
 
 
 def collect(study_dir: Path):
-    """Return (rows, n_errored, n_missing). rows = list of (task, reward, ok)."""
+    """Return (rows, n_errored). rows = list of (task, reward, ok)."""
     rows, n_errored = [], 0
     for sinfo in sorted(study_dir.rglob("summary_info.json")):
         exp_dir = sinfo.parent

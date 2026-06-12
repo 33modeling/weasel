@@ -45,7 +45,7 @@ cd weasel
 source scripts/setup_env.sh                       # paths, HF-cache redirect, venv helper
 bash scripts/install.sh all                       # 3 isolated venvs: select / train / eval
 weasel_activate select && huggingface-cli login   # for gated google/gemma-3-4b-it
-bash scripts/download_models.sh all               # Qwen2.5-7B-Instruct / Qwen3-8B / Gemma3-4B
+bash scripts/download_models.sh all               # Qwen2.5-7B / Qwen3-8B / Qwen3.5-9B / Gemma3-4B
 bash scripts/download_data.sh                     # pre-built WEASEL-selected 10K (fast path)
 bash scripts/prepare_dataset.sh                   # register dataset with LLaMA-Factory
 bash scripts/run_train.sh --gpus 0,1,2,3,4,5,6,7  # LoRA SFT (paper Table-9 recipe)

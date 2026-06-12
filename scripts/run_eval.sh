@@ -8,12 +8,15 @@
 #   VARIANT=full bash scripts/run_eval.sh --bench miniwob    # eval the full-data model (must match serve_vllm)
 #
 # bench: miniwob | webarena | webarena_lite | workarena_l1 | workarena_l2
+#   webarena_lite needs the official 165-task id list at configs/webarena_lite_tasks.txt
+#   (or WEBARENA_LITE_TASKS=<file>); without it the eval aborts rather than silently
+#   running the full 812-task WebArena under a 'lite' label.
 # VARIANT (default weasel) routes results to $EVAL_RESULTS_ROOT/<variant>; set the
 # SAME VARIANT you served, so full-data vs WEASEL-subset success rates stay separate.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if [ -z "${EVAL_RESULTS_ROOT:-}" ]; then
+if [ -z "${EVAL_RESULTS_ROOT:-}" ] || ! type weasel_activate >/dev/null 2>&1; then
   echo "Sourcing scripts/setup_env.sh..."; source scripts/setup_env.sh
 fi
 weasel_activate eval
@@ -26,7 +29,7 @@ while [ $# -gt 0 ]; do
     --n-jobs) NJOBS="$2"; shift 2 ;; --n-jobs=*) NJOBS="${1#*=}"; shift ;;
     --limit) LIMIT="$2"; shift 2 ;; --limit=*) LIMIT="${1#*=}"; shift ;;
     --variant) VARIANT="$2"; shift 2 ;; --variant=*) VARIANT="${1#*=}"; shift ;;
-    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
     *) echo "[warn] unknown arg: $1" >&2; shift ;;
   esac
 done

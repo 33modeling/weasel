@@ -63,22 +63,16 @@ export MODELS_DIR="${MODELS_DIR:-$WEASEL_WORK/models}"
 export MODEL_QWEN25_7B="${MODEL_QWEN25_7B:-$MODELS_DIR/Qwen2.5-7B-Instruct}"
 export MODEL_GEMMA3_4B="${MODEL_GEMMA3_4B:-$MODELS_DIR/gemma-3-4b-it}"
 export MODEL_QWEN3_8B="${MODEL_QWEN3_8B:-$MODELS_DIR/Qwen3-8B}"
+# Experiment model (exp1 full-data vs exp2 weasel-subset): point MODEL_QWEN35_9B
+# at your /group-volume checkpoint dir if you already have one; confirm the chat
+# template (Qwen3.x -> 'qwen3') if your checkpoint differs.
 export MODEL_QWEN35_9B="${MODEL_QWEN35_9B:-$MODELS_DIR/Qwen3.5-9B}"
 export QWEN35_9B_TEMPLATE="${QWEN35_9B_TEMPLATE:-qwen3}"          # Qwen3.x chat template
 # HF repo ids used for download (only when the local dir above is missing).
 export HFID_QWEN25_7B="${HFID_QWEN25_7B:-Qwen/Qwen2.5-7B-Instruct}"
 export HFID_GEMMA3_4B="${HFID_GEMMA3_4B:-google/gemma-3-4b-it}"   # GATED on HF
 export HFID_QWEN3_8B="${HFID_QWEN3_8B:-Qwen/Qwen3-8B}"
-# Qwen3.5-9B repo id is a best guess — VERIFY/override (the model may be a local
-# checkpoint or not yet public): export HFID_QWEN35_9B=<org/repo>  (or set MODEL_QWEN35_9B
-# to an existing dir to skip the download entirely).
-export HFID_QWEN35_9B="${HFID_QWEN35_9B:-Qwen/Qwen3.5-9B}"
-
-# --- Experiment model (exp1 full-data vs exp2 weasel-subset) ---
-# "qwen3.5-9b": set MODEL_QWEN35_9B to your /group-volume checkpoint dir.
-# Confirm the chat template (Qwen3.x -> 'qwen3'); change if your model differs.
-export MODEL_QWEN35_9B="${MODEL_QWEN35_9B:-$MODELS_DIR/Qwen3.5-9B}"
-export QWEN35_9B_TEMPLATE="${QWEN35_9B_TEMPLATE:-qwen3}"
+export HFID_QWEN35_9B="${HFID_QWEN35_9B:-Qwen/Qwen3.5-9B}"        # verified on HF (2026-06)
 
 # --- NEW experiment dataset (NOT AgentTrek; you provide it) ---
 export NEWDATA_RAW="${NEWDATA_RAW:-$WEASEL_DATA/newdata/raw.jsonl}"               # dataset as given
@@ -193,6 +187,10 @@ weasel_activate() {
   source "$venv/bin/activate"
   echo "[weasel_activate] $which venv active: $(command -v python)"
 }
+# Export the function so `bash scripts/run_*.sh` children inherit it when this
+# file was sourced from bash. Non-bash parents (zsh) can't export functions —
+# the run scripts' own guard re-sources this file in that case.
+if [ -n "${BASH_VERSION:-}" ]; then export -f weasel_activate; fi
 
 # -----------------------------------------------------------------------------
 # Existence checks (warn-only — never aborts)

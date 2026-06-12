@@ -14,7 +14,7 @@
 # Flags: --bench miniwob  --cutoff 8192  --per-device 1  --serve-gpu 0  --tp 1  --no-eval
 set -euo pipefail
 cd "$(dirname "$0")/.."
-if [ -z "${EXP_OUTPUT_ROOT:-}" ]; then source scripts/setup_env.sh; fi
+if [ -z "${EXP_OUTPUT_ROOT:-}" ] || ! type weasel_activate >/dev/null 2>&1; then source scripts/setup_env.sh; fi
 
 EXP=""; GPUS="0,1,2,3,4,5,6,7"; BENCH="miniwob"; CUTOFF="${CUTOFF:-8192}"
 PER_DEVICE="${PER_DEVICE:-1}"; SERVE_GPU=""; TP="${TP:-1}"; DO_EVAL=1
@@ -103,20 +103,25 @@ if [ "$DO_EVAL" = "0" ]; then
 fi
 echo "[exp:$EXP] serving merged model on GPU $SERVE_GPU (vLLM) + evaluating on $BENCH"
 SERVE_LOG="logs/exp_${EXP}_serve.log"
+# exec makes SERVE_PID the vllm process itself (not a wrapper bash), so the
+# EXIT trap actually frees the GPU/port instead of orphaning the server.
 bash -c "source scripts/setup_env.sh >/dev/null 2>&1; weasel_activate eval >/dev/null 2>&1; \
-  CUDA_VISIBLE_DEVICES=$SERVE_GPU vllm serve '$MERGED_DIR' \
+  CUDA_VISIBLE_DEVICES=$SERVE_GPU exec vllm serve '$MERGED_DIR' \
     --served-model-name '$VLLM_SERVED_NAME' --host '$VLLM_HOST' --port '$VLLM_PORT' \
     --tensor-parallel-size $TP --max-model-len 32768 --trust-remote-code" \
   > "$SERVE_LOG" 2>&1 &
 SERVE_PID=$!
 trap 'kill $SERVE_PID 2>/dev/null || true' EXIT
 echo "[exp:$EXP] waiting for vLLM endpoint $OPENAI_API_BASE ..."
+READY=0
 for i in $(seq 1 120); do
-  if curl -fsS "$OPENAI_API_BASE/models" >/dev/null 2>&1; then echo "[exp:$EXP] endpoint ready."; break; fi
+  if curl -fsS "$OPENAI_API_BASE/models" >/dev/null 2>&1; then echo "[exp:$EXP] endpoint ready."; READY=1; break; fi
   kill -0 "$SERVE_PID" 2>/dev/null || { echo "[error] vLLM died — see $SERVE_LOG" >&2; exit 1; }
   sleep 10
 done
+[ "$READY" = "1" ] || { echo "[error] vLLM endpoint not ready after 20 min — see $SERVE_LOG" >&2; exit 1; }
 
 EXP_RESULT_DIR="$EXP_OUTPUT_ROOT/$EXP/qwen35_9b/eval"
-EVAL_RESULTS_ROOT="$EXP_RESULT_DIR" bash scripts/run_eval.sh --bench "$BENCH"
-echo "[exp:$EXP] DONE. SR / results under $EXP_RESULT_DIR  (adapter=$ADAPTER_DIR merged=$MERGED_DIR)"
+# --variant "$EXP" keeps full vs weasel results (and log/CSV names) separate.
+EVAL_RESULTS_ROOT="$EXP_RESULT_DIR" bash scripts/run_eval.sh --bench "$BENCH" --variant "$EXP"
+echo "[exp:$EXP] DONE. SR / results under $EXP_RESULT_DIR/$EXP  (adapter=$ADAPTER_DIR merged=$MERGED_DIR)"

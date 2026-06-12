@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if [ -z "${OUTPUT_ROOT:-}" ]; then
+if [ -z "${OUTPUT_ROOT:-}" ] || ! type weasel_activate >/dev/null 2>&1; then
   echo "Sourcing scripts/setup_env.sh..."; source scripts/setup_env.sh
 fi
 weasel_activate train

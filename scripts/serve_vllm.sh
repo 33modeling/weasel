@@ -11,7 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if [ -z "${MERGED_ROOT:-}" ]; then
+if [ -z "${MERGED_ROOT:-}" ] || ! type weasel_activate >/dev/null 2>&1; then
   echo "Sourcing scripts/setup_env.sh..."; source scripts/setup_env.sh
 fi
 weasel_activate eval

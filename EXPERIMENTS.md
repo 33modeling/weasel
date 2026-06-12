@@ -20,6 +20,8 @@ Prereqs: complete `SETUP.md` steps 0–1 (`source scripts/setup_env.sh`, `bash s
 export MODEL_QWEN35_9B=/group-volume/<...>/qwen3.5-9b   # your path
 export QWEN35_9B_TEMPLATE=qwen3                          # confirm the chat template
 ```
+No local checkpoint? `bash scripts/download_models.sh qwen35_9b` pulls
+`Qwen/Qwen3.5-9B` (repo id verified on HF) into `$MODELS_DIR/Qwen3.5-9B`.
 
 ## 2. Prepare the NEW dataset  ← **needs the actual data**
 The dataset is not in WEASEL schema, so convert it to a `messages` JSON first
@@ -42,14 +44,15 @@ python scripts/convert_dataset.py --in /path/to/raw.jsonl --out "$NEWDATA_FULL_J
 ```bash
 bash scripts/run_experiment.sh --exp full --gpus 0,1,2,3,4,5,6,7
 # -> trains LoRA on full data, merges, serves (vLLM), runs MiniWob via run_eval.sh
-#    SR/results: $EXP_OUTPUT_ROOT/full/qwen35_9b/eval
+#    SR/results: $EXP_OUTPUT_ROOT/full/qwen35_9b/eval/full
+#    (run_eval.sh routes per VARIANT; run_experiment.sh passes --variant full)
 ```
 
 ## 4. Run experiment 2 (WEASEL subset)
 ```bash
 bash scripts/run_experiment.sh --exp weasel --gpus 0,1,2,3,4,5,6,7
 # -> run_select on the full data -> subset -> LoRA -> merge -> serve -> MiniWob
-#    SR/results: $EXP_OUTPUT_ROOT/weasel/qwen35_9b/eval
+#    SR/results: $EXP_OUTPUT_ROOT/weasel/qwen35_9b/eval/weasel
 ```
 `run_experiment.sh` reuses `scripts/run_select.sh` (prepare_scores→select_greedy→
 postprocess) for selection and `scripts/run_eval.sh` + `scripts/agentlab_eval.py`

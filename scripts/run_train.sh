@@ -12,7 +12,8 @@
 #
 # Data variant (separates checkpoints so full-data and WEASEL-subset don't clobber):
 #   bash scripts/run_train.sh --gpus 0                        # VARIANT=weasel (default), dataset=weasel_agenttrek
-#   VARIANT=full DATASET_NAME=weasel_gemini_full bash scripts/run_train.sh --gpus 0
+#   VARIANT=full DATASET_NAME=newdata_full bash scripts/run_train.sh --gpus 0
+#     (register the dataset first: bash scripts/register_dataset.sh --name newdata_full --file "$NEWDATA_FULL_JSON")
 #   -> adapters in $OUTPUT_ROOT/<model>/<variant>. Carry the SAME VARIANT into
 #      run_merge.sh / serve_vllm.sh / run_eval.sh.
 #
@@ -21,7 +22,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if [ -z "${OUTPUT_ROOT:-}" ]; then
+if [ -z "${OUTPUT_ROOT:-}" ] || ! type weasel_activate >/dev/null 2>&1; then
   echo "Sourcing scripts/setup_env.sh..."; source scripts/setup_env.sh
 fi
 weasel_activate train
@@ -39,7 +40,7 @@ while [ $# -gt 0 ]; do
     --gpus) GPUS="$2"; shift 2 ;;  --gpus=*) GPUS="${1#*=}"; shift ;;
     --cutoff) CUTOFF="$2"; shift 2 ;; --cutoff=*) CUTOFF="${1#*=}"; shift ;;
     --variant) VARIANT="$2"; shift 2 ;; --variant=*) VARIANT="${1#*=}"; shift ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
     *) echo "[warn] unknown arg: $1" >&2; shift ;;
   esac
 done
@@ -63,6 +64,12 @@ model_spec() {
     qwen3)     echo "$MODEL_QWEN3_8B qwen3 1.0e-6 2.0 8" ;;
     qwen35_9b) echo "$MODEL_QWEN35_9B $QWEN35_9B_TEMPLATE 1.0e-6 2.0 8" ;;  # paper Qwen3-8B recipe; tune if needed
     *) return 1 ;;
+  esac
+}
+
+dl_key() {  # model key here -> download_models.sh key
+  case "$1" in
+    qwen25) echo qwen25_7b ;; gemma3) echo gemma3_4b ;; qwen3) echo qwen3_8b ;; *) echo "$1" ;;
   esac
 }
 
@@ -101,7 +108,7 @@ render_cfg() {  # $1=model  $2=ngpu_for_this_job   -> prints rendered yaml path
 train_ddp() {  # all GPUS, torchrun
   local model="$1"
   read -r mpath _ _ _ _ <<< "$(model_spec "$model")"
-  [ -d "$mpath" ] || { echo "[skip] base model missing for $model: $mpath (bash scripts/download_models.sh $model)" >&2; return 0; }
+  [ -d "$mpath" ] || { echo "[skip] base model missing for $model: $mpath (bash scripts/download_models.sh $(dl_key "$model"))" >&2; return 0; }
   local cfg; cfg=$(render_cfg "$model" "$NPROC")
   local log="logs/train_${model}.log"
   echo "=== train $model (DDP, GPUs=$GPUS, nproc=$NPROC) cfg=$cfg ===" | tee -a "$log"
@@ -109,24 +116,32 @@ train_ddp() {  # all GPUS, torchrun
     llamafactory-cli train "$cfg" 2>&1 | tee -a "$log"
 }
 
-train_one_gpu() {  # single GPU, backgrounded
+train_one_gpu() {  # single GPU, backgrounded; sets TRAIN_PID ('' when skipped)
   local model="$1" gpu="$2"
+  TRAIN_PID=""
   read -r mpath _ _ _ _ <<< "$(model_spec "$model")"
-  [ -d "$mpath" ] || { echo "[skip] base model missing for $model: $mpath" >&2; return 0; }
+  [ -d "$mpath" ] || { echo "[skip] base model missing for $model: $mpath (bash scripts/download_models.sh $(dl_key "$model"))" >&2; return 0; }
   local cfg; cfg=$(render_cfg "$model" 1)
   local log="logs/train_${model}.log"
   echo "=== train $model (GPU $gpu, background) cfg=$cfg ===" | tee -a "$log"
   CUDA_VISIBLE_DEVICES="$gpu" nohup llamafactory-cli train "$cfg" >> "$log" 2>&1 &
+  TRAIN_PID=$!
 }
 
 if [ "$PARALLEL" = "1" ]; then
   idx=0; pids=()
   for model in $MODELS; do
     gpu="${_gpus_arr[$(( idx % NPROC ))]}"
-    train_one_gpu "$model" "$gpu"; pids+=($!); idx=$((idx+1))
+    train_one_gpu "$model" "$gpu"
+    [ -n "$TRAIN_PID" ] && pids+=("$TRAIN_PID")
+    idx=$((idx+1))
   done
-  echo "[run_train] launched ${#pids[@]} jobs across GPUs $GPUS. Tail logs/train_*.log"
-  wait "${pids[@]}"
+  if [ "${#pids[@]}" -gt 0 ]; then
+    echo "[run_train] launched ${#pids[@]} jobs across GPUs $GPUS. Tail logs/train_*.log"
+    wait "${pids[@]}"
+  else
+    echo "[run_train] nothing launched — all models were skipped." >&2
+  fi
 else
   for model in $MODELS; do train_ddp "$model"; done
 fi

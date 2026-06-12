@@ -48,10 +48,9 @@ bash scripts/download_data.sh            # pre-built WEASEL-selected 10K (fast p
 ```
 Single model: `download_models.sh {qwen25_7b|gemma3_4b|qwen3_8b|qwen35_9b}`.
 
-> **Qwen3.5-9B (`qwen35_9b`)** uses `HFID_QWEN35_9B` (best-guess `Qwen/Qwen3.5-9B`)
-> and `MODEL_QWEN35_9B` (default `$MODELS_DIR/Qwen3.5-9B`). **Verify the repo id** —
-> if it's wrong or the model isn't public, either `export HFID_QWEN35_9B=<org/repo>`
-> or point `MODEL_QWEN35_9B` at an existing local checkpoint dir (a present
+> **Qwen3.5-9B (`qwen35_9b`)** uses `HFID_QWEN35_9B` (default `Qwen/Qwen3.5-9B`,
+> verified on HF) and `MODEL_QWEN35_9B` (default `$MODELS_DIR/Qwen3.5-9B`). To use
+> an existing local checkpoint instead, point `MODEL_QWEN35_9B` at it (a present
 > `config.json` makes the download a no-op). Chat template defaults to
 > `QWEN35_9B_TEMPLATE=qwen3` — override if your checkpoint differs.
 

@@ -14,7 +14,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if [ -z "${WEASEL_DATA:-}" ]; then
+if [ -z "${WEASEL_DATA:-}" ] || ! type weasel_activate >/dev/null 2>&1; then
   echo "Sourcing scripts/setup_env.sh..."; source scripts/setup_env.sh
 fi
 weasel_activate select 2>/dev/null || true
