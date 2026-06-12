@@ -7,9 +7,9 @@ LoRA recipe (paper Qwen3-8B row: rank 8 / alpha 8 / lr 1e-6 / 2 epochs / bf16);
 
 | | Exp 1 (`full`) | Exp 2 (`weasel`) |
 |---|---|---|
-| data | full dataset | WEASEL-selected subset |
+| data | full dataset (`$NEWDATA_FULL_JSON`) | WEASEL-selected subset (`$NEWDATA_WEASEL_JSON`) |
 | finetune | LoRA (paper setup) | LoRA (identical) |
-| config | `configs/experiments/exp1_full/qwen35_9b.yaml` | `configs/experiments/exp2_weasel/qwen35_9b.yaml` |
+| trainer | `scripts/train_lora_sft.py` — recipe passed as flags by `run_experiment.sh` | same |
 | eval | MiniWob (smoke) via existing harness | MiniWob (smoke) via existing harness |
 
 Prereqs: complete `SETUP.md` steps 0–1 (`source scripts/setup_env.sh`, `bash scripts/install.sh all`).
@@ -18,14 +18,18 @@ Prereqs: complete `SETUP.md` steps 0–1 (`source scripts/setup_env.sh`, `bash s
 `qwen3.5-9b` is a local group-volume checkpoint:
 ```bash
 export MODEL_QWEN35_9B=/group-volume/<...>/qwen3.5-9b   # your path
-export QWEN35_9B_TEMPLATE=qwen3                          # confirm the chat template
 ```
+The chat template comes from the checkpoint's tokenizer (the trainer aborts
+with a clear error if the tokenizer has none).
 No local checkpoint? `bash scripts/download_models.sh qwen35_9b` pulls
 `Qwen/Qwen3.5-9B` (repo id verified on HF) into `$MODELS_DIR/Qwen3.5-9B`.
 
 ## 2. Prepare the NEW dataset  ← **needs the actual data**
 The dataset is not in WEASEL schema, so convert it to a `messages` JSON first
-(this is both the LLaMA-Factory training input and the WEASEL selection input):
+(this is both the `train_lora_sft.py` training input and the WEASEL selection
+input). If the data is already chat-shaped (`messages`/`conversations`, even with
+`tools`/`tool_calls`), the trainer reads it directly and only WEASEL selection
+needs the conversion:
 ```bash
 python scripts/inspect_dataset.py /path/to/raw.jsonl          # discover its fields
 # then convert (flags depend on the fields inspect shows):
@@ -65,5 +69,11 @@ for data without `## AXTree:` sections; `PRUNE=0` disables it explicitly.
   validates the train→serve→eval plumbing, not task performance.
 - **WEASEL selection assumes web-agent trajectories** (goal + AXTree states + steps).
   Applying it to arbitrary data requires the goal/step mapping in step 2.
-- Hyperparameters are the paper's Qwen3-8B values; tune lr/epochs/cutoff for the new
-  data via `--cutoff` and the YAMLs if needed.
+- **Watch the cutoff.** Loss is on assistant turns only, and an example whose
+  assistant tokens all fall beyond `--cutoff` is dropped. The Gemini
+  function-calling exports carry a ~20K-token system prompt, so the default
+  `CUTOFF=8192` would drop *every* conversation — run those with
+  `CUTOFF=32768` (the trainer prints how many examples survive).
+- Hyperparameters are the paper's Qwen3-8B values; tune for the new data via
+  `run_experiment.sh`'s `--cutoff` flag and the `LR=` / `EPOCHS=` env overrides
+  (e.g. `LR=2e-6 EPOCHS=3 bash scripts/run_experiment.sh --exp full ...`).

@@ -20,6 +20,3 @@ assets/paper_page*.png
 logs/
 .venv/
 *.rendered.yaml
-
-# Keep the tracked LLaMA-Factory dataset registration (overrides *.json above)
-!configs/llamafactory/dataset_info.json

@@ -7,9 +7,10 @@
 #   full   : LoRA SFT on FULL data ($NEWDATA_FULL_JSON)            -> merge -> serve -> eval
 #   weasel : WEASEL-select a subset of $NEWDATA_FULL_JSON -> LoRA  -> merge -> serve -> eval
 #
-# Same recipe for both (config YAMLs under configs/experiments/); only the data
-# differs. Eval reuses the EXISTING benchmark harness (scripts/run_eval.sh +
-# scripts/agentlab_eval.py). Default benchmark = miniwob (smoke).
+# Same recipe for both (paper Qwen3-8B row: LoRA r8/a8, lr 1e-6, 2 epochs,
+# global batch 8, bf16 — passed straight to scripts/train_lora_sft.py); only
+# the data differs. Eval reuses the EXISTING benchmark harness
+# (scripts/run_eval.sh + scripts/agentlab_eval.py). Default bench = miniwob.
 #
 # Flags: --bench miniwob  --cutoff 8192  --per-device 1  --serve-gpu 0  --tp 1  --no-eval
 set -euo pipefail
@@ -28,7 +29,7 @@ while [ $# -gt 0 ]; do
     --serve-gpu) SERVE_GPU="$2"; shift 2 ;;
     --tp) TP="$2"; shift 2 ;;
     --no-eval) DO_EVAL=0; shift ;;
-    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
     *) echo "[warn] unknown arg: $1" >&2; shift ;;
   esac
 done
@@ -39,18 +40,17 @@ GBATCH=8                                   # paper Qwen3-8B global batch
 ACCUM=$(( GBATCH / (NPROC * PER_DEVICE) )); [ "$ACCUM" -lt 1 ] && ACCUM=1
 
 MODEL_PATH="$MODEL_QWEN35_9B"
-TEMPLATE="$QWEN35_9B_TEMPLATE"
 [ -d "$MODEL_PATH" ] || { echo "[error] model not found: $MODEL_PATH  (set MODEL_QWEN35_9B to your group-volume checkpoint)" >&2; exit 1; }
 
 if [ "$EXP" = "full" ]; then
-  CFG_SRC="configs/experiments/exp1_full/qwen35_9b.yaml"; DATASET="newdata_full"; DATA_FILE="$NEWDATA_FULL_JSON"
+  DATA_FILE="$NEWDATA_FULL_JSON"
 else
-  CFG_SRC="configs/experiments/exp2_weasel/qwen35_9b.yaml"; DATASET="newdata_weasel"; DATA_FILE="$NEWDATA_WEASEL_JSON"
+  DATA_FILE="$NEWDATA_WEASEL_JSON"
 fi
 EXP_DIR="$EXP_OUTPUT_ROOT/$EXP/qwen35_9b"
 ADAPTER_DIR="$EXP_DIR/adapter"; MERGED_DIR="$EXP_DIR/merged"
 mkdir -p "$EXP_DIR" logs
-echo "[exp:$EXP] model=$MODEL_PATH template=$TEMPLATE gpus=$GPUS nproc=$NPROC accum=$ACCUM cutoff=$CUTOFF bench=$BENCH"
+echo "[exp:$EXP] model=$MODEL_PATH gpus=$GPUS nproc=$NPROC accum=$ACCUM cutoff=$CUTOFF bench=$BENCH"
 
 # ---------- 0. (weasel only) build the selected subset from the full data ----------
 if [ "$EXP" = "weasel" ]; then
@@ -66,38 +66,24 @@ if [ "$EXP" = "weasel" ]; then
     bash scripts/run_select.sh --input "$NEWDATA_FULL_JSON" --gpus "$FIRST_GPU"
 fi
 
-# ---------- 1. register dataset with LLaMA-Factory ----------
+# ---------- 1. LoRA SFT (standalone trainer, paper Qwen3-8B recipe) ----------
 [ -f "$DATA_FILE" ] || { echo "[error] dataset file missing: $DATA_FILE" >&2; exit 1; }
-bash scripts/register_dataset.sh --name "$DATASET" --file "$DATA_FILE"
-
-# ---------- 2. render config + LoRA SFT ----------
-CFG="$EXP_DIR/train_config.rendered.yaml"
-DS_LINE=""
-sed -e "s|@MODEL_PATH@|$MODEL_PATH|g" -e "s|@TEMPLATE@|$TEMPLATE|g" \
-    -e "s|@DATASET_DIR@|$LLAMAFACTORY_DIR/data|g" -e "s|@CUTOFF@|$CUTOFF|g" \
-    -e "s|@OUTPUT_DIR@|$ADAPTER_DIR|g" -e "s|@PER_DEVICE@|$PER_DEVICE|g" \
-    -e "s|@GRAD_ACCUM@|$ACCUM|g" -e "s|@DS_LINE@|$DS_LINE|g" \
-    "$CFG_SRC" > "$CFG"
-echo "[exp:$EXP] training -> $ADAPTER_DIR  (cfg=$CFG)"
+echo "[exp:$EXP] training -> $ADAPTER_DIR  (data=$DATA_FILE)"
 weasel_activate train
-CUDA_VISIBLE_DEVICES="$GPUS" FORCE_TORCHRUN=1 llamafactory-cli train "$CFG" 2>&1 | tee "logs/exp_${EXP}_train.log"
+CUDA_VISIBLE_DEVICES="$GPUS" torchrun --nproc_per_node "$NPROC" \
+  scripts/train_lora_sft.py \
+  --model-path "$MODEL_PATH" --data "$DATA_FILE" --output-dir "$ADAPTER_DIR" \
+  --lr "${LR:-1e-6}" --epochs "${EPOCHS:-2}" \
+  --grad-accum "$ACCUM" --per-device-batch "$PER_DEVICE" \
+  --cutoff-len "$CUTOFF" --lora-r 8 --lora-alpha 8 \
+  2>&1 | tee "logs/exp_${EXP}_train.log"
 
-# ---------- 3. merge LoRA -> fp16 ----------
-MCFG="$EXP_DIR/merge_config.yaml"
-cat > "$MCFG" <<YAML
-model_name_or_path: $MODEL_PATH
-adapter_name_or_path: $ADAPTER_DIR
-template: $TEMPLATE
-finetuning_type: lora
-trust_remote_code: true
-export_dir: $MERGED_DIR
-export_size: 5
-export_legacy_format: false
-YAML
+# ---------- 2. merge LoRA -> bf16 ----------
 echo "[exp:$EXP] merging -> $MERGED_DIR"
-llamafactory-cli export "$MCFG" 2>&1 | tee "logs/exp_${EXP}_merge.log"
+python scripts/merge_lora.py --base "$MODEL_PATH" --adapter "$ADAPTER_DIR" \
+  --output "$MERGED_DIR" 2>&1 | tee "logs/exp_${EXP}_merge.log"
 
-# ---------- 4. serve (background) + eval via existing benchmark harness ----------
+# ---------- 3. serve (background) + eval via existing benchmark harness ----------
 if [ "$DO_EVAL" = "0" ]; then
   echo "[exp:$EXP] --no-eval: done. merged model at $MERGED_DIR"; exit 0
 fi

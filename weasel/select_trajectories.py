@@ -22,7 +22,7 @@ Usage (keep original jsonl schema — selection only, no reformat):
                      train_data/dit_task_0504_gpt54-mini_multi_harness_task_14k.jsonl \
     --original-output data/selected_original.jsonl
 
-Usage (LLaMA-Factory native-FC ShareGPT):
+Usage (native-FC ShareGPT, trainable directly with scripts/train_lora_sft.py):
   python -m weasel.select_trajectories \
     --selected-dataset $WEASEL_TRAIN_JSON \
     --traj-dataset data/gemini_traj.jsonl \

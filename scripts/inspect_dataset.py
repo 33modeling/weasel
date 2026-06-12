@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect an arbitrary dataset so we can wire the WEASEL/LLaMA-Factory mapping.
+"""Inspect an arbitrary dataset so we can wire the WEASEL/SFT field mapping.
 
   python scripts/inspect_dataset.py /path/to/your_dataset.{json,jsonl,parquet} [-n 3]
 

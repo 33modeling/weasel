@@ -41,16 +41,17 @@ Examples
 
 Then, paper-faithful selection (mode a):
   TRAIN_INPUT_JSON=data/gemini_steps.jsonl bash scripts/run_select.sh --gpus 0
-  bash scripts/prepare_dataset.sh        # registers as weasel_agenttrek
-  bash scripts/run_train.sh --gpus 0
+  CUTOFF=32768 bash scripts/run_train.sh --gpus 0   # trains on $WEASEL_TRAIN_JSON
 
 Real-use trajectory training (mode b), optionally WEASEL-filtered:
   python -m weasel.select_trajectories \
     --selected-dataset data/weasel_agenttrek_train_10k.json \
     --traj-dataset data/gemini_traj.jsonl \
     --output data/gemini_traj_selected.jsonl
-  cp data/gemini_traj_selected.jsonl $LLAMAFACTORY_DIR/data/weasel_gemini_traj.json
-  DATASET_NAME=weasel_gemini_traj bash scripts/run_train.sh --gpus 0
+  DATA_FILE=data/gemini_traj_selected.jsonl CUTOFF=32768 bash scripts/run_train.sh --gpus 0
+
+(CUTOFF=32768: these exports carry a ~20K-token system prompt; the default 8192
+would truncate away every assistant turn and drop all examples.)
 """
 from __future__ import annotations
 
@@ -242,7 +243,8 @@ def build_steps(
 
 # ----------------------------------------------------------------- mode: traj
 def build_traj(record: Dict[str, Any], traj_id: int, *, max_obs_chars: int) -> Optional[Dict[str, Any]]:
-    """Convert one trajectory to native function-calling ShareGPT for LLaMA-Factory."""
+    """Convert one trajectory to native function-calling ShareGPT (function_call/
+    observation roles — scripts/train_lora_sft.py normalizes these for training)."""
     messages = record.get("messages") or []
     out_msgs: List[Dict[str, str]] = []
     for m in messages:
@@ -264,7 +266,7 @@ def build_traj(record: Dict[str, Any], traj_id: int, *, max_obs_chars: int) -> O
                     }
                     for tc in calls
                 ]
-                # LLaMA-Factory accepts a single object or a list of calls.
+                # ShareGPT function_call convention: a single object or a list of calls.
                 fc = payload[0] if len(payload) == 1 else payload
                 out_msgs.append({"role": "function_call", "content": json.dumps(fc, ensure_ascii=False)})
             elif text.strip():

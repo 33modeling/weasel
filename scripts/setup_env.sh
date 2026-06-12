@@ -11,7 +11,7 @@
 #
 # Layered design (3 isolated venvs — their deps genuinely conflict):
 #   select : torch + bert-score        -> WEASEL data-selection pipeline (this repo)
-#   train  : hiyouga/LLaMA-Factory     -> LoRA SFT of Qwen2.5-7B / Gemma3-4B / Qwen3-8B
+#   train  : transformers + peft       -> standalone LoRA SFT (scripts/train_lora_sft.py)
 #   eval   : vllm + agentlab/browsergym-> serve fine-tuned model + run benchmarks
 
 # -----------------------------------------------------------------------------
@@ -34,9 +34,6 @@ export WEASEL_VENV_SELECT="${WEASEL_VENV_SELECT:-$WEASEL_WORK/venvs/select}"
 export WEASEL_VENV_TRAIN="${WEASEL_VENV_TRAIN:-$WEASEL_WORK/venvs/train}"
 export WEASEL_VENV_EVAL="${WEASEL_VENV_EVAL:-$WEASEL_WORK/venvs/eval}"
 
-# hiyouga/LLaMA-Factory checkout (cloned by scripts/install.sh train)
-export LLAMAFACTORY_DIR="${LLAMAFACTORY_DIR:-$WEASEL_WORK/LLaMA-Factory}"
-
 # -----------------------------------------------------------------------------
 # Data
 # -----------------------------------------------------------------------------
@@ -47,7 +44,7 @@ export TRAIN_INPUT_JSON="${TRAIN_INPUT_JSON:-$WEASEL_DATA/train.json}"   # conve
 # Selection-pipeline intermediates (scripts/run_select.sh writes these).
 export GOALS_SCORES_JSON="${GOALS_SCORES_JSON:-$WEASEL_DATA/goals_with_scores.json}"
 export SELECTED_INDICES_JSON="${SELECTED_INDICES_JSON:-$WEASEL_DATA/selected_indices_T0_3.json}"
-# Final SFT file fed to LLaMA-Factory. Default = the authors' pre-built 10K
+# Final SFT file fed to scripts/train_lora_sft.py. Default = the authors' pre-built 10K
 # (scripts/download_data.sh grabs it); run_select.sh overwrites it if you
 # re-run the pipeline from scratch.
 export WEASEL_TRAIN_JSON="${WEASEL_TRAIN_JSON:-$WEASEL_DATA/weasel_agenttrek_train_10k.json}"
@@ -64,10 +61,9 @@ export MODEL_QWEN25_7B="${MODEL_QWEN25_7B:-$MODELS_DIR/Qwen2.5-7B-Instruct}"
 export MODEL_GEMMA3_4B="${MODEL_GEMMA3_4B:-$MODELS_DIR/gemma-3-4b-it}"
 export MODEL_QWEN3_8B="${MODEL_QWEN3_8B:-$MODELS_DIR/Qwen3-8B}"
 # Experiment model (exp1 full-data vs exp2 weasel-subset): point MODEL_QWEN35_9B
-# at your /group-volume checkpoint dir if you already have one; confirm the chat
-# template (Qwen3.x -> 'qwen3') if your checkpoint differs.
+# at your /group-volume checkpoint dir if you already have one. The chat template
+# comes from the checkpoint's tokenizer (train_lora_sft.py / vLLM both read it).
 export MODEL_QWEN35_9B="${MODEL_QWEN35_9B:-$MODELS_DIR/Qwen3.5-9B}"
-export QWEN35_9B_TEMPLATE="${QWEN35_9B_TEMPLATE:-qwen3}"          # Qwen3.x chat template
 # HF repo ids used for download (only when the local dir above is missing).
 export HFID_QWEN25_7B="${HFID_QWEN25_7B:-Qwen/Qwen2.5-7B-Instruct}"
 export HFID_GEMMA3_4B="${HFID_GEMMA3_4B:-google/gemma-3-4b-it}"   # GATED on HF
@@ -84,7 +80,7 @@ export EXP_OUTPUT_ROOT="${EXP_OUTPUT_ROOT:-$WEASEL_WORK/experiments}"           
 # Outputs (all on group-volume)
 # -----------------------------------------------------------------------------
 export OUTPUT_ROOT="${OUTPUT_ROOT:-$WEASEL_WORK/checkpoints}"      # LoRA adapters per model
-export MERGED_ROOT="${MERGED_ROOT:-$WEASEL_WORK/merged}"           # merged fp16 models for serving
+export MERGED_ROOT="${MERGED_ROOT:-$WEASEL_WORK/merged}"           # merged bf16 models for serving
 export EVAL_RESULTS_ROOT="${EVAL_RESULTS_ROOT:-$WEASEL_WORK/eval-results}"
 
 # -----------------------------------------------------------------------------

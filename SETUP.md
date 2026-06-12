@@ -34,11 +34,12 @@ weasel_activate select && huggingface-cli login      # easiest
 bash scripts/install.sh all          # select + train + eval  (or run one at a time)
 ```
 - **select** — torch (cu124) + bert-score → the data-selection pipeline (this repo)
-- **train**  — clones + installs hiyouga/LLaMA-Factory (LoRA SFT)
+- **train**  — torch (cu124) + transformers + peft → standalone LoRA SFT
+  (`scripts/train_lora_sft.py` / `scripts/merge_lora.py` — no LLaMA-Factory)
 - **eval**   — vLLM + AgentLab + BrowserGym + Playwright/Chromium + MiniWob++ HTML
 
-(Why three? vLLM pins torch, AgentLab needs Python <3.13, bert-score/LLaMA-Factory
-want different transformers — one env would conflict.)
+(Why three? vLLM pins torch, AgentLab needs Python <3.13, bert-score and the
+trainer want different transformers — one env would conflict.)
 
 ## 2. Get models + data
 
@@ -51,8 +52,8 @@ Single model: `download_models.sh {qwen25_7b|gemma3_4b|qwen3_8b|qwen35_9b}`.
 > **Qwen3.5-9B (`qwen35_9b`)** uses `HFID_QWEN35_9B` (default `Qwen/Qwen3.5-9B`,
 > verified on HF) and `MODEL_QWEN35_9B` (default `$MODELS_DIR/Qwen3.5-9B`). To use
 > an existing local checkpoint instead, point `MODEL_QWEN35_9B` at it (a present
-> `config.json` makes the download a no-op). Chat template defaults to
-> `QWEN35_9B_TEMPLATE=qwen3` — override if your checkpoint differs.
+> `config.json` makes the download a no-op). The chat template comes from the
+> checkpoint's tokenizer — no template setting needed.
 
 **(Optional)** re-run selection from raw AgentTrek instead of the pre-built file:
 ```bash
@@ -82,8 +83,9 @@ bash scripts/convert_traindata.sh        # converts every train_data/*.jsonl
 * **Just training a model to use it** (your own harness, native tool-calling) →
   use **(c) keep the original jsonl**: WEASEL still picks the subset, but the
   selected trajectories stay in their original function-calling schema, unchanged.
-* **(b)** is the middle option — selection applied, re-emitted as LLaMA-Factory
-  native function-calling ShareGPT (`weasel_gemini_traj`).
+* **(b)** is the middle option — selection applied, re-emitted as native
+  function-calling ShareGPT (`function_call`/`observation` turns), which
+  `scripts/train_lora_sft.py` trains directly.
 
 * **(a) paper-faithful** — each trajectory is exploded into per-step ShareGPT records
   (action serialized into assistant text, `## Goal/## AXTree/# Observation` markers
@@ -91,18 +93,20 @@ bash scripts/convert_traindata.sh        # converts every train_data/*.jsonl
   trajectory recipe apply unchanged:
   ```bash
   TRAIN_INPUT_JSON=$WEASEL_DATA/gemini_steps.jsonl bash scripts/run_select.sh --gpus 0
-  bash scripts/prepare_dataset.sh && bash scripts/run_train.sh --gpus 0   # dataset weasel_agenttrek
+  CUTOFF=32768 bash scripts/run_train.sh --gpus 0   # trains on $WEASEL_TRAIN_JSON
   ```
 * **(b) real use** — each trajectory stays a single native function-calling record
-  (`function_call`/`observation` turns + `tools` column; registered as
-  `weasel_gemini_traj`). Apply WEASEL by mapping the steps it selected back to whole
-  trajectories:
+  (`function_call`/`observation` turns + `tools` column). Apply WEASEL by mapping
+  the steps it selected back to whole trajectories:
   ```bash
   python -m weasel.select_trajectories \
     --selected-dataset $WEASEL_TRAIN_JSON --traj-dataset $WEASEL_DATA/gemini_traj.jsonl \
-    --output $LLAMAFACTORY_DIR/data/weasel_gemini_traj.json
-  DATASET_NAME=weasel_gemini_traj bash scripts/run_train.sh --gpus 0
+    --output $WEASEL_DATA/gemini_traj_selected.jsonl
+  DATA_FILE=$WEASEL_DATA/gemini_traj_selected.jsonl CUTOFF=32768 bash scripts/run_train.sh --gpus 0
   ```
+  > `CUTOFF=32768` matters for these exports: their system prompt alone is
+  > ~20K tokens, and the default 8192 would drop every conversation (loss is
+  > assistant-only; examples whose assistant tokens are all truncated are dropped).
 
 * **(c) keep the original jsonl** — selection only, **no reformat**. WEASEL still
   scores the step projection (a), but the selected trajectories are re-emitted in
@@ -123,8 +127,11 @@ and GPT-5.4-mini exports train as one pool. WEASEL groups steps by goal text; pa
 
 ## 3. Train (LoRA SFT — the 8×A100 step)
 
+Training is `scripts/train_lora_sft.py` (transformers + peft; chat formatting
+comes from each model's tokenizer template, loss on assistant turns only).
+It reads the training FILE directly — no dataset registration step:
+
 ```bash
-bash scripts/prepare_dataset.sh                      # register dataset with LLaMA-Factory
 bash scripts/run_train.sh --gpus 0,1,2,3,4,5,6,7     # sequential DDP, all models
 # or use the cluster fully (1 model per GPU, concurrent):
 bash scripts/run_train.sh --gpus 0,1,2 --parallel
@@ -134,12 +141,12 @@ Gemma3-4B lr 2e-5 ×2ep, Qwen3-8B lr 1e-6 ×2ep. Global batch is held constant a
 
 **Model keys** (`MODELS=` selects which to run; default `qwen25 gemma3 qwen3`):
 
-| key | base | template | lr / epochs / global-batch |
-|---|---|---|---|
-| `qwen25` | Qwen2.5-7B-Instruct | qwen | 2e-5 / 4 / 8 |
-| `gemma3` | gemma-3-4b-it | gemma3 | 2e-5 / 2 / 16 |
-| `qwen3` | Qwen3-8B | qwen3 | 1e-6 / 2 / 8 |
-| `qwen35_9b` | Qwen3.5-9B | `$QWEN35_9B_TEMPLATE` (qwen3) | 1e-6 / 2 / 8 — inherits the Qwen3-8B recipe; tune in `model_spec` if needed |
+| key | base | lr / epochs / global-batch |
+|---|---|---|
+| `qwen25` | Qwen2.5-7B-Instruct | 2e-5 / 4 / 8 |
+| `gemma3` | gemma-3-4b-it | 2e-5 / 2 / 16 |
+| `qwen3` | Qwen3-8B | 1e-6 / 2 / 8 |
+| `qwen35_9b` | Qwen3.5-9B | 1e-6 / 2 / 8 — inherits the Qwen3-8B recipe; tune in `model_spec` if needed |
 
 `qwen35_9b` is **not** in the default set — run it explicitly (same for merge/serve):
 ```bash
@@ -147,22 +154,22 @@ MODELS="qwen35_9b" bash scripts/run_train.sh --gpus 0
 MODELS="qwen35_9b" bash scripts/run_merge.sh
 bash scripts/serve_vllm.sh qwen35_9b --gpus 0
 # full-data vs WEASEL-subset for this model:
-VARIANT=full DATASET_NAME=<full_dataset> MODELS="qwen35_9b" bash scripts/run_train.sh --gpus 0
+VARIANT=full DATA_FILE="$NEWDATA_FULL_JSON" MODELS="qwen35_9b" bash scripts/run_train.sh --gpus 0
 ```
 
 **Where checkpoints go:** LoRA adapters (not full models) are written to
 `$OUTPUT_ROOT/<model>/<variant>/` — e.g. `…/checkpoints/qwen25/weasel/` — with one
-`checkpoint-*` per epoch (`save_strategy: epoch`), plus the rendered config
-`train_config.rendered.yaml` and `logs/train_<model>.log`.
+`checkpoint-*` per epoch (plus the final adapter at the dir root) and
+`logs/train_<model>.log`.
 
 **Data variant (full vs WEASEL-subset):** `VARIANT` (default `weasel`) is the data
 tag threaded through train → merge → serve → eval so the two never clobber each other.
 The recipe is identical; **only the dataset differs** (paper's `+Full` vs `+Weasel`):
 ```bash
 # WEASEL-subset (default)
-bash scripts/run_train.sh --gpus 0                                  # dataset weasel_agenttrek
-# Full data — register it first, then pass VARIANT + DATASET_NAME
-VARIANT=full DATASET_NAME=<your_full_dataset> bash scripts/run_train.sh --gpus 0
+bash scripts/run_train.sh --gpus 0                                  # data $WEASEL_TRAIN_JSON
+# Full data — point DATA_FILE at the training file and tag the variant
+VARIANT=full DATA_FILE="$NEWDATA_FULL_JSON" bash scripts/run_train.sh --gpus 0
 ```
 → adapters land in `…/<model>/weasel/` vs `…/<model>/full/`.
 
@@ -173,10 +180,10 @@ VARIANT=full DATASET_NAME=<your_full_dataset> bash scripts/run_train.sh --gpus 0
 ## 4. Merge + serve
 
 `run_merge.sh` fuses the LoRA adapter back into the base model to produce a standalone
-fp16 model (vLLM can't serve a bare adapter):
+bf16 model (vLLM can't serve a bare adapter):
 ```
 $OUTPUT_ROOT/<model>/<variant>  (adapter) + base model
-   --(llamafactory-cli export)-->  $MERGED_ROOT/<model>/<variant>  (merged fp16, sharded)
+   --(scripts/merge_lora.py)-->  $MERGED_ROOT/<model>/<variant>  (merged bf16, sharded)
 ```
 ```bash
 bash scripts/run_merge.sh                  # VARIANT=weasel: …/merged/<model>/weasel
@@ -213,11 +220,10 @@ VARIANT=full bash scripts/run_eval.sh --bench miniwob   # -> eval-results/full/
 ```
 /group-volume/$USER/weasel/        ← WEASEL_WORK (everything heavy)
 ├── venvs/{select,train,eval}/     ← the 3 venvs
-├── LLaMA-Factory/                 ← training engine
 ├── models/                        ← base checkpoints
 ├── data/                          ← AgentTrek + weasel_agenttrek_train_10k.json
 ├── checkpoints/<model>/<variant>/ ← OUTPUT_ROOT (LoRA adapters; variant=weasel|full|…)
-├── merged/<model>/<variant>/      ← merged fp16 for serving
+├── merged/<model>/<variant>/      ← merged bf16 for serving
 ├── eval-results/<variant>/        ← AgentLab study outputs + success-rate summary
 └── cache/huggingface, cache/ms-playwright
 ~/weasel/                          ← this code checkout (user-volume)

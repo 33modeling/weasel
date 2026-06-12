@@ -4,11 +4,11 @@
 # Usage:
 #   bash scripts/install.sh all              # select + train + eval (default)
 #   bash scripts/install.sh select           # just the data-selection pipeline
-#   bash scripts/install.sh train            # just LLaMA-Factory (LoRA SFT)
+#   bash scripts/install.sh train            # just LoRA SFT (transformers+peft)
 #   bash scripts/install.sh eval             # just vLLM + AgentLab/BrowserGym
 #
-# Everything lands on /group-volume (venvs, LLaMA-Factory clone, playwright
-# browsers). Re-running is idempotent: an existing venv is reused/upgraded.
+# Everything lands on /group-volume (venvs, playwright browsers). Re-running
+# is idempotent: an existing venv is reused/upgraded.
 #
 # Requires: python3.12 (AgentLab needs >=3.11,<3.13), git, internet.
 # A100 80GB (sm_80) works with the default CUDA wheels of every tool below.
@@ -58,19 +58,15 @@ install_select() {
 
 install_train() {
   echo "=============================================================="
-  echo "[install] (2/3) TRAIN venv -> $WEASEL_VENV_TRAIN  (LLaMA-Factory)"
+  echo "[install] (2/3) TRAIN venv -> $WEASEL_VENV_TRAIN  (transformers+peft LoRA SFT)"
   echo "=============================================================="
   _mkvenv "$WEASEL_VENV_TRAIN"
-  if [ ! -d "$LLAMAFACTORY_DIR/.git" ]; then
-    echo "[install] cloning LLaMA-Factory -> $LLAMAFACTORY_DIR"
-    git clone --depth 1 https://github.com/hiyouga/LLaMA-Factory.git "$LLAMAFACTORY_DIR"
-  else
-    git -C "$LLAMAFACTORY_DIR" pull --ff-only || true
-  fi
-  # torch + metrics + 4-bit + multi-GPU sharding (deepspeed) for 8xA100.
-  pip install -e "$LLAMAFACTORY_DIR[torch,metrics,bitsandbytes,deepspeed]"
+  # CUDA torch FIRST (A100=sm_80), then the standalone-trainer stack
+  # (scripts/train_lora_sft.py + scripts/merge_lora.py).
+  pip install torch --index-url https://download.pytorch.org/whl/cu124
+  pip install transformers peft datasets accelerate sentencepiece protobuf
   pip install "huggingface_hub[cli]"
-  llamafactory-cli version || true
+  python -c "import torch,transformers,peft,datasets;print('[train] torch',torch.__version__,'cuda',torch.cuda.is_available(),'| transformers',transformers.__version__,'| peft',peft.__version__)"
   deactivate
 }
 

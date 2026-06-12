@@ -3,7 +3,7 @@
 
 Output = a JSON list of records: {"messages": [{"role","content"}, ...]} with
 roles system/user/assistant — which is BOTH:
-  - LLaMA-Factory `sharegpt` (training input for exp1 full + exp2 subset), and
+  - the training input for scripts/train_lora_sft.py (exp1 full + exp2 subset), and
   - the WEASEL selection input, IF the user turn carries the headers the
     pipeline greps for: '## Goal:', '## AXTree:', '# Observation of current step:'.
 

@@ -10,7 +10,7 @@ WEASEL selects compact, goal-relevant, and diverse web-agent trajectory steps to
 
 > **Fork note (`33modeling/weasel`, `dev` branch).** This fork adds a fully
 > scripted, end-to-end cluster setup (8×A100 80GB) on top of the upstream
-> data-selection pipeline: install → download → select → LoRA-SFT (LLaMA-Factory)
+> data-selection pipeline: install → download → select → LoRA-SFT (transformers+peft)
 > → merge → serve (vLLM) → evaluate (AgentLab/BrowserGym). Active work lives on
 > `dev`. See **[SETUP.md](SETUP.md)** for the full guide and the
 > [Quickstart](#quickstart-cluster-dev-branch) below. Upstream:
@@ -47,9 +47,8 @@ bash scripts/install.sh all                       # 3 isolated venvs: select / t
 weasel_activate select && huggingface-cli login   # for gated google/gemma-3-4b-it
 bash scripts/download_models.sh all               # Qwen2.5-7B / Qwen3-8B / Qwen3.5-9B / Gemma3-4B
 bash scripts/download_data.sh                     # pre-built WEASEL-selected 10K (fast path)
-bash scripts/prepare_dataset.sh                   # register dataset with LLaMA-Factory
-bash scripts/run_train.sh --gpus 0,1,2,3,4,5,6,7  # LoRA SFT (paper Table-9 recipe)
-bash scripts/run_merge.sh                         # LoRA -> merged fp16
+bash scripts/run_train.sh --gpus 0,1,2,3,4,5,6,7  # standalone LoRA SFT (paper Table-9 recipe)
+bash scripts/run_merge.sh                         # LoRA -> merged bf16
 bash scripts/serve_vllm.sh qwen25 --gpus 0        # OpenAI-compatible endpoint (leave running)
 bash scripts/run_eval.sh --bench miniwob          # zero-shot eval (start with MiniWob)
 ```
@@ -59,14 +58,13 @@ Scripts (mirror the conventions of our `tads/scripts`):
 | script | purpose |
 |---|---|
 | `scripts/setup_env.sh` | source once: group-volume workspace, HF-cache redirect, offline-by-default, `weasel_activate {select\|train\|eval}`, warn-only path checks |
-| `scripts/install.sh` | create the 3 venvs (vLLM / AgentLab / bert-score / LLaMA-Factory have conflicting deps) |
+| `scripts/install.sh` | create the 3 venvs (vLLM / AgentLab / bert-score / the trainer have conflicting deps) |
 | `scripts/download_models.sh` · `download_data.sh` | base checkpoints + training data → group-volume |
-| `scripts/run_select.sh` | re-run selection (`prepare_scores`→`select_greedy`→`postprocess`) |
-| `scripts/run_train.sh` | 8×A100 LoRA SFT (`--gpus`/`--parallel`, constant global batch) |
-| `scripts/run_merge.sh` · `serve_vllm.sh` | merge LoRA + serve for eval |
+| `scripts/run_select.sh` | re-run selection (`prune_axtree`→`prepare_scores`→`select_greedy`→`postprocess`) |
+| `scripts/run_train.sh` + `train_lora_sft.py` | 8×A100 standalone LoRA SFT — transformers+peft, no LLaMA-Factory (`--gpus`/`--parallel`, constant global batch) |
+| `scripts/run_merge.sh` + `merge_lora.py` · `serve_vllm.sh` | merge LoRA + serve for eval |
 | `scripts/run_eval.sh` + `agentlab_eval.py` | AgentLab/BrowserGym eval (`--bench miniwob\|webarena\|workarena_l1\|workarena_l2`) |
 | `scripts/setup_webarena.sh` | optional self-hosted WebArena sites (Docker) |
-| `configs/llamafactory/` | LoRA-SFT yaml template + `dataset_info.json` |
 
 > The manual per-step commands below are still valid; the Quickstart just wraps
 > them with cluster-aware paths and venvs.
@@ -123,10 +121,21 @@ python -m weasel.postprocess_dataset \
 
 ## Training
 
-For supervised fine-tuning, we used [hiyouga/LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory).
-After building the WEASEL-selected training file, you can use it as the training
-dataset in a LLaMA-Factory SFT run. On a cluster, `scripts/run_train.sh` wraps
-this (LoRA rank 8 / alpha 8 / bf16; per-model lr and epochs follow the paper).
+The paper used [hiyouga/LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory)
+for supervised fine-tuning. This fork ships an equivalent standalone trainer —
+`scripts/train_lora_sft.py` (transformers + peft, same recipe: LoRA rank 8 /
+alpha 8 / bf16, loss on assistant turns only; per-model lr and epochs follow
+the paper) — so the WEASEL-selected file trains with no extra framework:
+
+```bash
+python scripts/train_lora_sft.py \
+  --model-path <base model> --data path/to/weasel_train_10k.json \
+  --output-dir out/adapter --lr 1e-6 --epochs 2
+python scripts/merge_lora.py --base <base model> --adapter out/adapter --output out/merged
+```
+
+On a cluster, `scripts/run_train.sh` wraps this (DDP via torchrun, per-model
+paper recipes, `VARIANT`/`DATA_FILE` data routing).
 
 If you want to directly use our trained model checkpoints, they are available in
 the [WEASEL Hugging Face collection](https://huggingface.co/collections/yeonjooooni/weasel):
