@@ -64,6 +64,7 @@ Scripts (mirror the conventions of our `tads/scripts`):
 | `scripts/run_train.sh` + `train_lora_sft.py` | 8×A100 standalone LoRA SFT — transformers+peft, no LLaMA-Factory (`--gpus`/`--parallel`, constant global batch) |
 | `scripts/run_merge.sh` + `merge_lora.py` · `serve_vllm.sh` | merge LoRA + serve for eval |
 | `scripts/run_eval.sh` + `agentlab_eval.py` | AgentLab/BrowserGym eval (`--bench miniwob\|webarena\|workarena_l1\|workarena_l2`) |
+| `scripts/summarize_results.py` · `miniwob_report.py` | success-rate summary + HTML trajectory-analysis report (per-task SR, action freq, failure modes, per-episode action drill-down) |
 | `scripts/setup_webarena.sh` | optional self-hosted WebArena sites (Docker) |
 
 > The manual per-step commands below are still valid; the Quickstart just wraps

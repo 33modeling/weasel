@@ -77,3 +77,12 @@ echo "[run_eval] summarizing success rate..."
 python scripts/summarize_results.py --root "$RESULTS_DIR" \
   --csv "logs/eval_${VARIANT}_${BENCH}_summary.csv" 2>&1 | tee -a "logs/eval_${VARIANT}_${BENCH}.log" || \
   echo "[run_eval][warn] summary failed; results still under $RESULTS_DIR"
+
+# HTML trajectory-analysis report (runs in this eval venv, so it reads the full
+# per-step trajectories). Best-effort: a failure here never fails the eval.
+echo "[run_eval] building trajectory report..."
+REPORT="logs/eval_${VARIANT}_${BENCH}_report.html"
+python scripts/miniwob_report.py --root "$RESULTS_DIR" --variant "$VARIANT" \
+  --out "$REPORT" 2>&1 | tee -a "logs/eval_${VARIANT}_${BENCH}.log" && \
+  echo "[run_eval] trajectory report -> $REPORT" || \
+  echo "[run_eval][warn] trajectory report failed; results still under $RESULTS_DIR"

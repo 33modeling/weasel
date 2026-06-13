@@ -227,6 +227,20 @@ full-data and WEASEL-subset success rates land in separate dirs:
 VARIANT=full bash scripts/run_eval.sh --bench miniwob   # -> eval-results/full/
 ```
 
+`run_eval.sh` also writes an **HTML trajectory-analysis report**
+(`logs/eval_<variant>_<bench>_report.html`) via `scripts/miniwob_report.py`.
+Because it runs in the eval venv it reads the full per-step trajectories and
+reports: overall + per-task success rate (worst tasks first), step-count
+distribution (success vs failure), action-type frequency, a failure-mode
+breakdown (agent/env error · out-of-steps · wrong-answer · action-exec errors),
+token/time cost signals, and a per-episode drill-down of the action sequence
+(with the agent's `think`, reward, and action errors). Re-generate or point it
+at any past study standalone:
+```bash
+python scripts/miniwob_report.py --study-dir eval-results/weasel/<study> --out report.html
+# (outside the eval venv it degrades to summary_info.json-only task stats)
+```
+
 ### Benchmark difficulty
 | bench | local? | extra requirement |
 |---|---|---|
