@@ -141,11 +141,19 @@ def normalize_record(rec: dict) -> dict | None:
 def render(tok, msgs, tools, add_generation_prompt=False):
     if not msgs:
         return []
-    ids = tok.apply_chat_template(
-        msgs, tools=tools, tokenize=True,
-        add_generation_prompt=add_generation_prompt,
-        return_dict=False,   # transformers >= 5 returns a dict by default
-    )
+    try:
+        ids = tok.apply_chat_template(
+            msgs, tools=tools, tokenize=True,
+            add_generation_prompt=add_generation_prompt,
+            return_dict=False,   # transformers >= 5 returns a dict by default
+        )
+    except Exception:
+        # Strict chat templates (e.g. Qwen3.5: 'No user query found in messages.')
+        # reject a system-only prefix that build_example walks while computing
+        # assistant-token spans. Treat as 'this prefix does not render' — the
+        # masking loop handles a zero-length ids cleanly (bound=0, no labels
+        # written for non-trainable roles).
+        return []
     return list(ids)
 
 
