@@ -297,6 +297,10 @@ def main() -> int:
         # unsupported model types — losing the fused-CE memory savings with no
         # error. Surface that here instead.
         try:
+            import liger_kernel  # noqa: F401
+        except ModuleNotFoundError:
+            sys.exit("[train_lora_sft] --liger requires `pip install liger-kernel`.")
+        try:
             from liger_kernel.transformers.monkey_patch import (
                 MODEL_TYPE_TO_APPLY_LIGER_FN)
             if model.config.model_type not in MODEL_TYPE_TO_APPLY_LIGER_FN:
@@ -304,8 +308,6 @@ def main() -> int:
                       f"model_type='{model.config.model_type}' — fused CE will "
                       "NOT apply and the logits tensor will be materialized "
                       "in full. Expect much higher memory use.")
-        except ImportError:
-            sys.exit("[train_lora_sft] --liger requires `pip install liger-kernel`.")
         except Exception:
             pass  # internal liger API moved; let transformers handle it
 
