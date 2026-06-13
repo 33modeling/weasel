@@ -74,6 +74,11 @@ for data without `## AXTree:` sections; `PRUNE=0` disables it explicitly.
   function-calling exports carry a ~20K-token system prompt, so the default
   `CUTOFF=8192` would drop *every* conversation — run those with
   `CUTOFF=32768` (the trainer prints how many examples survive).
+- **Memory at 32K cutoff.** Qwen3.5-9B's 248K vocab makes the logits tensor
+  ~49GB (bf16 + the loss's fp32 copy) at 32K — pass `LIGER=1` (fused CE) even
+  on A100 80GB. On 24GB cards (e.g. 2× RTX 4090) use `QLORA=1` (4-bit base +
+  Liger), which fits 9B @ 32K in ~17–19GB. Both env vars work for
+  `run_train.sh` and `run_experiment.sh`.
 - Hyperparameters are the paper's Qwen3-8B values; tune for the new data via
   `run_experiment.sh`'s `--cutoff` flag and the `LR=` / `EPOCHS=` env overrides
   (e.g. `LR=2e-6 EPOCHS=3 bash scripts/run_experiment.sh --exp full ...`).

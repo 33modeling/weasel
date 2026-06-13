@@ -135,7 +135,9 @@ python scripts/merge_lora.py --base <base model> --adapter out/adapter --output 
 ```
 
 On a cluster, `scripts/run_train.sh` wraps this (DDP via torchrun, per-model
-paper recipes, `VARIANT`/`DATA_FILE` data routing).
+paper recipes, `VARIANT`/`DATA_FILE` data routing). For 24GB GPUs or long
+cutoffs, `--qlora` (4-bit base + Liger fused CE) / `--liger` keep memory in
+check — see [SETUP.md](SETUP.md).
 
 If you want to directly use our trained model checkpoints, they are available in
 the [WEASEL Hugging Face collection](https://huggingface.co/collections/yeonjooooni/weasel):

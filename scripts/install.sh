@@ -65,6 +65,7 @@ install_train() {
   # (scripts/train_lora_sft.py + scripts/merge_lora.py).
   pip install torch --index-url https://download.pytorch.org/whl/cu124
   pip install transformers peft datasets accelerate sentencepiece protobuf
+  pip install bitsandbytes liger-kernel    # --load-4bit (QLoRA) / --liger (fused CE)
   pip install "huggingface_hub[cli]"
   python -c "import torch,transformers,peft,datasets;print('[train] torch',torch.__version__,'cuda',torch.cuda.is_available(),'| transformers',transformers.__version__,'| peft',peft.__version__)"
   deactivate

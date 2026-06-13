@@ -12,7 +12,7 @@
 # the data differs. Eval reuses the EXISTING benchmark harness
 # (scripts/run_eval.sh + scripts/agentlab_eval.py). Default bench = miniwob.
 #
-# Flags: --bench miniwob  --cutoff 8192  --per-device 1  --serve-gpu 0  --tp 1  --no-eval
+# Flags: --bench --cutoff --per-device --serve-gpu --tp --no-eval  (env: LR= EPOCHS= QLORA=1 LIGER=1)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 if [ -z "${EXP_OUTPUT_ROOT:-}" ] || ! type weasel_activate >/dev/null 2>&1; then source scripts/setup_env.sh; fi
@@ -70,12 +70,15 @@ fi
 [ -f "$DATA_FILE" ] || { echo "[error] dataset file missing: $DATA_FILE" >&2; exit 1; }
 echo "[exp:$EXP] training -> $ADAPTER_DIR  (data=$DATA_FILE)"
 weasel_activate train
+EXTRA_FLAGS=()
+[ "${QLORA:-0}" = "1" ] && EXTRA_FLAGS+=(--load-4bit --liger)
+[ "${QLORA:-0}" = "0" ] && [ "${LIGER:-0}" = "1" ] && EXTRA_FLAGS+=(--liger)
 CUDA_VISIBLE_DEVICES="$GPUS" torchrun --nproc_per_node "$NPROC" \
   scripts/train_lora_sft.py \
   --model-path "$MODEL_PATH" --data "$DATA_FILE" --output-dir "$ADAPTER_DIR" \
   --lr "${LR:-1e-6}" --epochs "${EPOCHS:-2}" \
   --grad-accum "$ACCUM" --per-device-batch "$PER_DEVICE" \
-  --cutoff-len "$CUTOFF" --lora-r 8 --lora-alpha 8 \
+  --cutoff-len "$CUTOFF" --lora-r 8 --lora-alpha 8 ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"} \
   2>&1 | tee "logs/exp_${EXP}_train.log"
 
 # ---------- 2. merge LoRA -> bf16 ----------

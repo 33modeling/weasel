@@ -34,8 +34,9 @@ weasel_activate select && huggingface-cli login      # easiest
 bash scripts/install.sh all          # select + train + eval  (or run one at a time)
 ```
 - **select** — torch (cu124) + bert-score → the data-selection pipeline (this repo)
-- **train**  — torch (cu124) + transformers + peft → standalone LoRA SFT
-  (`scripts/train_lora_sft.py` / `scripts/merge_lora.py` — no LLaMA-Factory)
+- **train**  — torch (cu124) + transformers + peft + bitsandbytes + liger-kernel
+  → standalone LoRA SFT (`scripts/train_lora_sft.py` / `scripts/merge_lora.py` —
+  no LLaMA-Factory)
 - **eval**   — vLLM + AgentLab + BrowserGym + Playwright/Chromium + MiniWob++ HTML
 
 (Why three? vLLM pins torch, AgentLab needs Python <3.13, bert-score and the
@@ -156,6 +157,23 @@ bash scripts/serve_vllm.sh qwen35_9b --gpus 0
 # full-data vs WEASEL-subset for this model:
 VARIANT=full DATA_FILE="$NEWDATA_FULL_JSON" MODELS="qwen35_9b" bash scripts/run_train.sh --gpus 0
 ```
+
+**Low-VRAM / long-cutoff (`--qlora`, `--liger`):** the [seq, vocab] logits
+tensor dominates memory at long cutoffs — at 32K tokens × 248K vocab
+(Qwen3.5-9B) it is ~16GB bf16 plus a ~33GB fp32 copy inside the loss, so even
+an 80GB A100 is borderline. `--liger` (Liger fused cross-entropy) never
+materializes it. On 24GB cards (e.g. 2× RTX 4090) the bf16 weights alone
+(~18GB for 9B) don't fit either — `--qlora` loads the base in 4-bit NF4
+(~5.5GB) *and* enables Liger, which fits 9B @ 32K in roughly 17–19GB:
+```bash
+# 2x RTX 4090, Gemini exports:
+QLORA=1 CUTOFF=32768 DATA_FILE=$WEASEL_DATA/gemini_traj_selected.jsonl \
+  MODELS="qwen35_9b" bash scripts/run_train.sh --gpus 0,1
+# A100 at CUTOFF>=32768 — fused CE alone is enough:
+LIGER=1 CUTOFF=32768 MODELS="qwen35_9b" bash scripts/run_train.sh --gpus 0,1,2,3,4,5,6,7
+```
+The QLoRA adapter merges with the regular `run_merge.sh` (into the full-precision
+base — standard practice; tiny numerical drift vs the quantized base is expected).
 
 **Where checkpoints go:** LoRA adapters (not full models) are written to
 `$OUTPUT_ROOT/<model>/<variant>/` — e.g. `…/checkpoints/qwen25/weasel/` — with one

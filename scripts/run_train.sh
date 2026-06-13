@@ -10,6 +10,8 @@
 #   bash scripts/run_train.sh --gpus 0,1,2,3,4,5,6,7          # sequential DDP
 #   bash scripts/run_train.sh --gpus 0,1,2 --parallel         # 1 model per GPU, concurrent
 #   MODELS="qwen25 qwen3" bash scripts/run_train.sh --gpus 0,1
+#   --qlora : 4-bit base + Liger fused CE — for 24GB cards (e.g. 2x RTX 4090)
+#   --liger : Liger fused CE only — recommended at CUTOFF>=32768 even on A100
 #
 # Data variant (separates checkpoints so full-data and WEASEL-subset don't clobber):
 #   bash scripts/run_train.sh --gpus 0                        # VARIANT=weasel, data=$WEASEL_TRAIN_JSON
@@ -33,16 +35,23 @@ PARALLEL=0
 PER_DEVICE=${PER_DEVICE:-1}
 CUTOFF=${CUTOFF:-8192}
 VARIANT=${VARIANT:-weasel}     # data variant -> checkpoints land in $OUTPUT_ROOT/<model>/<variant>
+QLORA=${QLORA:-0}              # 1 = 4-bit base + Liger fused CE (24GB cards)
+LIGER=${LIGER:-0}              # 1 = Liger fused CE only (long cutoffs on big cards)
 while [ $# -gt 0 ]; do
   case "$1" in
     --parallel) PARALLEL=1; shift ;;
+    --qlora) QLORA=1; shift ;;
+    --liger) LIGER=1; shift ;;
     --gpus) GPUS="$2"; shift 2 ;;  --gpus=*) GPUS="${1#*=}"; shift ;;
     --cutoff) CUTOFF="$2"; shift 2 ;; --cutoff=*) CUTOFF="${1#*=}"; shift ;;
     --variant) VARIANT="$2"; shift 2 ;; --variant=*) VARIANT="${1#*=}"; shift ;;
-    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
     *) echo "[warn] unknown arg: $1" >&2; shift ;;
   esac
 done
+EXTRA_FLAGS=""
+[ "$QLORA" = "1" ] && EXTRA_FLAGS="--load-4bit --liger"
+[ "$QLORA" = "0" ] && [ "$LIGER" = "1" ] && EXTRA_FLAGS="--liger"
 
 # Default training file per variant; override with DATA_FILE=<path>.
 if [ -z "${DATA_FILE:-}" ]; then
@@ -75,7 +84,7 @@ dl_key() {  # model key here -> download_models.sh key
 }
 
 mkdir -p logs
-echo "[run_train] MODELS=$MODELS  GPUS=$GPUS  NPROC=$NPROC  PARALLEL=$PARALLEL  cutoff=$CUTOFF"
+echo "[run_train] MODELS=$MODELS  GPUS=$GPUS  NPROC=$NPROC  PARALLEL=$PARALLEL  cutoff=$CUTOFF  extra=${EXTRA_FLAGS:-none}"
 echo "[run_train] VARIANT=$VARIANT  DATA_FILE=$DATA_FILE  -> checkpoints under \$OUTPUT_ROOT/<model>/$VARIANT"
 
 train_args() {  # $1=model  $2=ngpu_for_this_job  -> prints CLI args for train_lora_sft.py
@@ -86,7 +95,7 @@ train_args() {  # $1=model  $2=ngpu_for_this_job  -> prints CLI args for train_l
   mkdir -p "$out_dir"
   echo "--model-path $mpath --data $DATA_FILE --output-dir $out_dir" \
        "--lr $lr --epochs $epochs --grad-accum $accum --per-device-batch $PER_DEVICE" \
-       "--cutoff-len $CUTOFF --lora-r 8 --lora-alpha 8"
+       "--cutoff-len $CUTOFF --lora-r 8 --lora-alpha 8 $EXTRA_FLAGS"
 }
 
 train_ddp() {  # all GPUS, torchrun

@@ -6,6 +6,8 @@ LoRA rank 8 / alpha 8 / dropout 0, all linear targets, cosine LR with 0.1
 warmup, AdamW, bf16, save per epoch. Launch single-GPU with `python`, or
 multi-GPU DDP with `torchrun --nproc_per_node N` (scripts/run_train.sh wraps
 both and holds the paper's global batch constant via --grad-accum).
+Low-VRAM: --load-4bit (QLoRA) + --liger (fused CE) fit a 9B model at 32K
+cutoff on a 24GB card; --liger alone is recommended for 32K even on A100.
 
 Data: one --data file, JSON list or JSONL. Each record needs "messages"
 (OpenAI schema: role system|user|assistant|tool, content; assistant turns may
@@ -64,6 +66,15 @@ def parse_args() -> argparse.Namespace:
                     help="Skip assistant-only masking; loss on every token.")
     ap.add_argument("--no-gradient-checkpointing", dest="gradient_checkpointing",
                     action="store_false")
+    ap.add_argument("--load-4bit", action="store_true",
+                    help="QLoRA: load the base model in 4-bit NF4 (bitsandbytes). "
+                         "~9B drops from ~18GB to ~5.5GB of weights per GPU — "
+                         "needed on 24GB cards (e.g. RTX 4090).")
+    ap.add_argument("--liger", action="store_true",
+                    help="Patch the model with Liger kernels (fused linear "
+                         "cross-entropy never materializes the [seq, vocab] "
+                         "logits tensor — at 32K x 248K vocab that saves ~49GB). "
+                         "Needs pip install liger-kernel.")
     ap.add_argument("--resume", action="store_true",
                     help="Resume from the last checkpoint in --output-dir.")
     ap.add_argument("--save-state", action="store_true",
@@ -256,9 +267,47 @@ def main() -> int:
                 "attention_mask": torch.tensor(attn, dtype=torch.long)}
 
     dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[args.dtype]
+    load_kwargs = {}
+    if args.load_4bit:
+        from transformers import BitsAndBytesConfig
+        load_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True, bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True, bnb_4bit_compute_dtype=dtype)
+        # Quantized weights can't be moved after loading — pin each DDP rank's
+        # replica to its own GPU at load time.
+        load_kwargs["device_map"] = {"": int(os.environ.get("LOCAL_RANK", "0"))}
     model = AutoModelForCausalLM.from_pretrained(
-        args.model_path, torch_dtype=dtype, trust_remote_code=True)
+        args.model_path, torch_dtype=dtype, trust_remote_code=True, **load_kwargs)
     model.config.use_cache = False
+    if args.load_4bit:
+        from peft import prepare_model_for_kbit_training
+        model = prepare_model_for_kbit_training(
+            model, use_gradient_checkpointing=args.gradient_checkpointing,
+            gradient_checkpointing_kwargs={"use_reentrant": False})
+        # peft upcasts every non-quantized param to fp32; for a 248K vocab the
+        # (frozen) token embedding + lm_head alone are ~8GB in fp32. Cast the
+        # big 2D matrices back to the compute dtype; tiny norm vectors stay
+        # fp32 for stability. (LoRA params are added after this and untouched.)
+        if dtype != torch.float32:
+            for p in model.parameters():
+                if p.ndim == 2 and p.dtype == torch.float32:
+                    p.data = p.data.to(dtype)
+    if args.liger:
+        # transformers applies liger at trainer.train() and silently no-ops on
+        # unsupported model types — losing the fused-CE memory savings with no
+        # error. Surface that here instead.
+        try:
+            from liger_kernel.transformers.monkey_patch import (
+                MODEL_TYPE_TO_APPLY_LIGER_FN)
+            if model.config.model_type not in MODEL_TYPE_TO_APPLY_LIGER_FN:
+                print(f"[train_lora_sft][warn] liger-kernel has no patch for "
+                      f"model_type='{model.config.model_type}' — fused CE will "
+                      "NOT apply and the logits tensor will be materialized "
+                      "in full. Expect much higher memory use.")
+        except ImportError:
+            sys.exit("[train_lora_sft] --liger requires `pip install liger-kernel`.")
+        except Exception:
+            pass  # internal liger API moved; let transformers handle it
 
     targets = args.lora_targets
     if targets != "all-linear":
@@ -287,6 +336,7 @@ def main() -> int:
         seed=args.seed,
         gradient_checkpointing=args.gradient_checkpointing,
         gradient_checkpointing_kwargs={"use_reentrant": False},
+        use_liger_kernel=args.liger,
         ddp_timeout=180000000,
         ddp_find_unused_parameters=False,
         remove_unused_columns=False,
