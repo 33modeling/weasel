@@ -210,6 +210,49 @@ bash scripts/serve_vllm.sh qwen25 --gpus 0 # serves that merged model on :8000 (
 VARIANT=full bash scripts/run_merge.sh && VARIANT=full bash scripts/serve_vllm.sh qwen25 --gpus 0
 ```
 
+### Serving Qwen3.5-9B via vLLM (one-time overlay)
+
+vLLM 0.22.1 only registers the multimodal `Qwen3_5ForConditionalGeneration`
+arch; the standalone text path fails at hybrid (full + linear) KV-cache
+unify. Compounding that, `scripts/merge_lora.py` writes the tuned weights
+under the multimodal namespace (`model.language_model.*`), so they are
+already in the shape the multimodal arch expects — they just need the base's
+`visual.*` + `mtp.*` tensors next to them. The overlay helper writes that
+combined checkpoint to `…/merged/qwen35_9b/weasel_mm/`:
+
+```bash
+/path/to/venvs/train/bin/python scripts/_overlay_text_into_mm.py \
+   --base "$MODELS_DIR/Qwen3.5-9B" \
+   --text "$MERGED_ROOT/qwen35_9b/weasel" \
+   --out  "$MERGED_ROOT/qwen35_9b/weasel_mm"
+```
+
+Then serve `weasel_mm/` (not `weasel/`) with a few extra flags:
+
+```bash
+VLLM_USE_FLASHINFER_SAMPLER=0 vllm serve "$MERGED_ROOT/qwen35_9b/weasel_mm" \
+   --served-model-name weasel --host 127.0.0.1 --port 8002 \
+   --max-model-len 32768 --trust-remote-code --gpu-memory-utilization 0.83 \
+   --enforce-eager --language-model-only --skip-mm-profiling
+```
+
+- `--language-model-only --skip-mm-profiling`: zero out the multimodal limits
+  so the agent only sends text.
+- `VLLM_USE_FLASHINFER_SAMPLER=0`: avoid FlashInfer's runtime nvcc JIT (no
+  CUDA toolkit on the box); the PyTorch-native top-p/top-k sampler is fine.
+- `--enforce-eager`: skip torch.compile/CUDA-graph capture — quicker boot
+  and one less thing that depends on a specific toolchain.
+- `Qwen3.5-9B` needs `transformers>=5.12.0` (model_type `qwen3_5_text` was
+  added there). If the eval venv was provisioned earlier, upgrade with
+  `pip install --upgrade 'transformers==5.12.0'`.
+
+For the standalone text-only route (e.g. debugging without overlay), the
+shim at `scripts/_vllm_qwen35.py` registers the missing
+`Qwen3_5ForCausalLM` arch and a weight-name remap that strips the extra
+`language_model.` segment — call it exactly like `vllm`. The multimodal
+overlay path above is what actually serves cleanly today; the shim is kept
+for reference.
+
 ## 5. Evaluate (zero-shot, in a second shell)
 
 ```bash
