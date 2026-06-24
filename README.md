@@ -61,6 +61,7 @@ Scripts (mirror the conventions of our `tads/scripts`):
 | `scripts/install.sh` | create the 3 venvs (vLLM / AgentLab / bert-score / the trainer have conflicting deps) |
 | `scripts/download_models.sh` · `download_data.sh` | base checkpoints + training data → group-volume |
 | `scripts/run_select.sh` | re-run selection (`prune_axtree`→`prepare_scores`→`select_greedy`→`postprocess`) |
+| `weasel/select_clean.py` | **alternative** one-pass curation for native function-calling exports (1 line = 1 trajectory): step-level BERTScore φ importance + trajectory-level signature dedup → original schema, no convert round-trip |
 | `scripts/run_train.sh` + `train_lora_sft.py` | 8×A100 standalone LoRA SFT — transformers+peft, no LLaMA-Factory (`--gpus`/`--parallel`, constant global batch) |
 | `scripts/run_merge.sh` + `merge_lora.py` · `serve_vllm.sh` | merge LoRA + serve for eval |
 | `scripts/run_eval.sh` + `agentlab_eval.py` | AgentLab/BrowserGym eval (`--bench miniwob\|webarena\|workarena_l1\|workarena_l2`) |
@@ -119,6 +120,40 @@ python -m weasel.postprocess_dataset \
   --max-examples 10000 \
   --seed 0
 ```
+
+## Alternative: one-pass curation for native FC data (`select_clean`)
+
+Sections 0–3 above are the paper's **step-level** pipeline (AgentTrek-style data:
+prune → score → select steps → postprocess). For applying WEASEL to **native
+function-calling exports** where *one jsonl line is one whole multi-turn
+trajectory* (e.g. Gemini/GPT tool-calling logs), `weasel.select_clean` does the
+curation in **one pass on the original file** and re-emits the **original schema** —
+no `convert_gemini` round-trip, so the output trains directly with `train_lora_sft.py`.
+
+It keeps each WEASEL signal at the granularity that fits this data shape:
+
+- **importance** — paper-faithful, *step level*: `r_t = BERTScore(obs_history_t, goal)`,
+  `phi_t = max(0, r_t − r_{t-1})`, aggregated to a per-trajectory quality
+  (`mean(phi)`, or final `r_T`). Read straight from the raw messages, so BERTScore
+  stays on short step text (its valid regime).
+- **dedup** — *trajectory level*: each trajectory → a short **signature** (its action
+  sequence + answer word-shingles); group by task, drop near-duplicate signatures
+  (Jaccard ≥ threshold), keep the highest-quality representative. `O(N)` — no
+  whole-trajectory BERTScore (which collapses on the shared 65k-char system prompt),
+  no global all-pairs.
+
+```bash
+# importance (GPU/bert_score) + near-duplicate dedup, keep the top half per task
+python -m weasel.select_clean \
+  --input export.jsonl --output weasel_clean.jsonl --keep-frac 0.5
+
+# dedup only — pure stdlib, no GPU
+python -m weasel.select_clean --input export.jsonl --output weasel_clean.jsonl --no-importance
+```
+
+Key knobs: `--quality meanphi|final`, `--near-dup-threshold` (0.9), `--keep-frac` /
+`--keep-k` (per task), `--min-steps`, `--task-field` (default `__source_task__`, else
+the goal text). The output is original-schema records → trains directly via **Training** below.
 
 ## Training
 
