@@ -152,8 +152,11 @@ python -m weasel.select_clean --input export.jsonl --output weasel_clean.jsonl -
 ```
 
 Key knobs: `--quality meanphi|final`, `--near-dup-threshold` (0.9), `--keep-frac` /
-`--keep-k` (per task), `--min-steps`, `--task-field` (default `__source_task__`, else
+`--keep-k` (per task), `--min-steps`, `--answer-lang ko|zh` (keep only that-language
+answers, dropping the other CJK script), `--task-field` (default `__source_task__`, else
 the goal text). The output is original-schema records → trains directly via **Training** below.
+The run prints a per-task rollout histogram and a Jaccard distribution to help calibrate
+`--near-dup-threshold`.
 
 ## Training
 

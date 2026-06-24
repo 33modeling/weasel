@@ -105,6 +105,38 @@ def _clip(text: str, limit: int) -> str:
 
 
 # ----------------------------------------------------------------------------
+# Answer-language filter (script-ratio based, no deps)
+# ----------------------------------------------------------------------------
+_HANGUL = ((0xAC00, 0xD7A3), (0x1100, 0x11FF), (0x3130, 0x318F))
+_CJK = ((0x4E00, 0x9FFF), (0x3400, 0x4DBF), (0xF900, 0xFAFF))
+
+
+def script_counts(text: str) -> Tuple[int, int]:
+    """(hangul_chars, cjk_ideograph_chars) in text."""
+    ko = cjk = 0
+    for ch in text:
+        o = ord(ch)
+        if any(lo <= o <= hi for lo, hi in _HANGUL):
+            ko += 1
+        elif any(lo <= o <= hi for lo, hi in _CJK):
+            cjk += 1
+    return ko, cjk
+
+
+def passes_answer_lang(answer: str, lang: str) -> bool:
+    """True if `answer` is acceptable for the target-language filter.
+
+    'ko' keeps Korean-dominant answers (drops Chinese-dominant); 'zh' the reverse.
+    Pure-Latin / empty answers have neither script and always pass."""
+    ko, cjk = script_counts(answer)
+    if lang == "ko":
+        return ko >= cjk
+    if lang == "zh":
+        return cjk >= ko
+    return True
+
+
+# ----------------------------------------------------------------------------
 # Step extraction (importance) + fingerprint (dedup)
 # ----------------------------------------------------------------------------
 def _action_repr(msg: Dict[str, Any], arg_chars: int) -> str:
@@ -204,16 +236,22 @@ def quality_from_steps(scorer, goals: Sequence[str], histories_per_traj: Sequenc
                        *, batch_size: int, quality: str) -> List[float]:
     """One quality score per trajectory from step-level BERTScore phi.
 
-    All step pairs in the chunk are flattened and scored in one batched pass."""
+    Empty obs-history (every trajectory's first step, before any tool result) is scored
+    r=0 directly instead of calling BERTScore on an empty string. Non-empty step pairs
+    are flattened and scored in one batched pass."""
     candidates: List[str] = []
     references: List[str] = []
-    spans: List[Tuple[int, int]] = []
+    plans: List[List[Optional[int]]] = []   # per traj: f1 index per step, or None (empty obs -> r=0)
     for goal, histories in zip(goals, histories_per_traj):
-        start = len(candidates)
+        plan: List[Optional[int]] = []
         for h in histories:
-            candidates.append(h)
-            references.append(goal)
-        spans.append((start, len(candidates)))
+            if h:
+                plan.append(len(candidates))
+                candidates.append(h)
+                references.append(goal)
+            else:
+                plan.append(None)
+        plans.append(plan)
 
     f1_all: List[float] = []
     for s in range(0, len(candidates), batch_size):
@@ -222,8 +260,8 @@ def quality_from_steps(scorer, goals: Sequence[str], histories_per_traj: Sequenc
         f1_all.extend(float(x) for x in f1.cpu().tolist())
 
     out: List[float] = []
-    for start, end in spans:
-        r = f1_all[start:end]
+    for plan in plans:
+        r = [0.0 if idx is None else f1_all[idx] for idx in plan]
         if not r:
             out.append(0.0)
         elif quality == "final":
@@ -237,8 +275,12 @@ def quality_from_steps(scorer, goals: Sequence[str], histories_per_traj: Sequenc
 # ----------------------------------------------------------------------------
 # Dedup + selection
 # ----------------------------------------------------------------------------
-def dedup_group(group: List[Dict[str, Any]], threshold: float, max_jaccard_group: int) -> List[Dict[str, Any]]:
-    """Greedily keep the highest-quality representative of each near-dup cluster."""
+def dedup_group(group: List[Dict[str, Any]], threshold: float,
+                max_jaccard_group: int) -> Tuple[List[Dict[str, Any]], List[float]]:
+    """Greedily keep the highest-quality representative of each near-dup cluster.
+
+    Returns (kept, jaccard_samples); each sample is a candidate's max Jaccard to the
+    already-kept set (feeds the stats histogram). Empty for the exact-dedup fallback."""
     ordered = sorted(group, key=lambda m: m["quality"], reverse=True)
     if len(ordered) > max_jaccard_group:
         # Too large for O(n^2) Jaccard: fall back to exact-fingerprint dedup (O(n)).
@@ -249,13 +291,17 @@ def dedup_group(group: List[Dict[str, Any]], threshold: float, max_jaccard_group
                 continue
             seen.add(m["fp"])
             kept.append(m)
-        return kept
+        return kept, []
     kept: List[Dict[str, Any]] = []
+    samples: List[float] = []
     for m in ordered:
-        if any(jaccard(m["fp"], k["fp"]) >= threshold for k in kept):
+        maxj = max((jaccard(m["fp"], k["fp"]) for k in kept), default=0.0)
+        if kept:
+            samples.append(maxj)
+        if maxj >= threshold:
             continue
         kept.append(m)
-    return kept
+    return kept, samples
 
 
 def main() -> int:
@@ -274,6 +320,9 @@ def main() -> int:
     ap.add_argument("--keep-k", type=int, default=None,
                     help="After dedup, keep at most this many survivors per task (by quality).")
     ap.add_argument("--min-steps", type=int, default=1, help="Drop trajectories with fewer actions.")
+    ap.add_argument("--answer-lang", choices=["ko", "zh"], default=None,
+                    help="Keep only trajectories whose final answer is dominant in this language "
+                         "(drops the other CJK script; e.g. --answer-lang ko drops Chinese answers).")
     ap.add_argument("--task-field", default="__source_task__",
                     help="Record field that identifies the task; falls back to goal text if absent.")
     ap.add_argument("--model-type", default="roberta-large", help="BERTScore model (importance).")
@@ -299,7 +348,7 @@ def main() -> int:
 
     # --- Pass 1: extract per-trajectory quality + fingerprint (lightweight metadata only) ---
     metas: List[Dict[str, Any]] = []
-    n_read = n_dropped_steps = 0
+    n_read = n_dropped_steps = n_dropped_lang = 0
     pending: List[Dict[str, Any]] = []   # buffered trajectories awaiting a GPU flush
 
     def flush_pending() -> None:
@@ -329,6 +378,9 @@ def main() -> int:
             if n_steps < args.min_steps:
                 n_dropped_steps += 1
                 continue
+            if args.answer_lang and not passes_answer_lang(answer, args.answer_lang):
+                n_dropped_lang += 1
+                continue
             task = str(rec.get(args.task_field) or goal or "<no_task>")
             fp = fingerprint(actions, answer, answer_shingle=args.answer_shingle)
             pending.append({"gid": this_gid, "task": task, "fp": fp, "goal": goal,
@@ -346,8 +398,10 @@ def main() -> int:
 
     keep_gids: set = set()
     n_after_dedup = 0
+    jaccard_samples: List[float] = []
     for task, group in by_task.items():
-        survivors = dedup_group(group, args.near_dup_threshold, args.max_jaccard_group)
+        survivors, samples = dedup_group(group, args.near_dup_threshold, args.max_jaccard_group)
+        jaccard_samples.extend(samples)
         n_after_dedup += len(survivors)
         survivors.sort(key=lambda m: m["quality"], reverse=True)
         if args.keep_k is not None:
@@ -371,10 +425,13 @@ def main() -> int:
                 gid += 1
 
     # --- Report ---
+    rollout_sizes = sorted((len(g) for g in by_task.values()), reverse=True)
     print("\n=== select_clean ===")
     print(f"  read trajectories         : {n_read}")
     print(f"  dropped (< {args.min_steps} step)        : {n_dropped_steps}")
-    print(f"  near-duplicates removed   : {n_read - n_dropped_steps - n_after_dedup}")
+    if args.answer_lang:
+        print(f"  dropped (answer != {args.answer_lang})    : {n_dropped_lang}")
+    print(f"  near-duplicates removed   : {n_read - n_dropped_steps - n_dropped_lang - n_after_dedup}")
     print(f"  after dedup               : {n_after_dedup}")
     print(f"  selected (written)        : {written}  -> {out_path}")
     print(f"  importance                : {'OFF (length proxy)' if scorer is None else args.quality}")
@@ -383,6 +440,30 @@ def main() -> int:
         print(f"  per-task keep-frac        : {args.keep_frac}")
     if args.keep_k is not None:
         print(f"  per-task keep-k           : {args.keep_k}")
+
+    # tasks / rollouts-per-task (shows how much cross-rollout redundancy exists)
+    if rollout_sizes:
+        med = rollout_sizes[len(rollout_sizes) // 2]
+        buckets = {"1": 0, "2-5": 0, "6-20": 0, "21+": 0}
+        for s in rollout_sizes:
+            key = "1" if s == 1 else "2-5" if s <= 5 else "6-20" if s <= 20 else "21+"
+            buckets[key] += 1
+        print(f"  tasks                     : {len(rollout_sizes)}  "
+              f"(rollouts/task: max {rollout_sizes[0]}, median {med})")
+        print("  rollouts/task histogram   : " + "  ".join(f"{k}={v}" for k, v in buckets.items()))
+
+    # Jaccard distribution of dedup decisions (to calibrate --near-dup-threshold)
+    if jaccard_samples:
+        counts = [0] * 10
+        for v in jaccard_samples:
+            counts[min(9, int(v * 10))] += 1
+        mx = max(counts) or 1
+        thr_bucket = min(9, int(args.near_dup_threshold * 10))
+        print(f"  Jaccard dist (n={len(jaccard_samples)}; bars = dedup decisions):")
+        for i in range(10):
+            bar = "#" * round(counts[i] / mx * 26)
+            mark = "  <-- threshold here" if i == thr_bucket else ""
+            print(f"    {i/10:.1f}-{(i+1)/10:.1f}  {counts[i]:>6}  {bar}{mark}")
     return 0
 
 
