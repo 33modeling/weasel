@@ -16,9 +16,9 @@ Designed for multi-turn FC data where **one jsonl line == one whole trajectory**
       regime. No synthesized "## AXTree" markers, no conversion.
 
   dedup       [TRAJECTORY level, cheap/CPU]
-      Each trajectory -> a short "signature" (its action sequence + answer
+      Each trajectory -> a short "fingerprint" (its action sequence + answer
       word-shingles). Group by task (--task-field, default __source_task__, else
-      the goal text); within a group, greedily drop near-duplicate signatures
+      the goal text); within a group, greedily drop near-duplicate fingerprints
       (Jaccard >= --near-dup-threshold), keeping the highest-quality representative.
       O(N) read + O(group^2) cheap set ops -- no global all-pairs, no BERTScore here.
 
@@ -105,7 +105,7 @@ def _clip(text: str, limit: int) -> str:
 
 
 # ----------------------------------------------------------------------------
-# Step extraction (importance) + signature (dedup)
+# Step extraction (importance) + fingerprint (dedup)
 # ----------------------------------------------------------------------------
 def _action_repr(msg: Dict[str, Any], arg_chars: int) -> str:
     """Compact 'tool(args)' string for one assistant action (empty if no tool_call)."""
@@ -134,7 +134,7 @@ def walk_trajectory(record: Dict[str, Any], *, max_obs_chars: int, max_history_c
 
     obs_histories[t] = accumulated tool-observation text the agent had seen *before*
     action t (mirrors the paper's per-step obs_history). action_tokens feed the dedup
-    signature; final_answer is the last assistant text turn."""
+    fingerprint; final_answer is the last assistant text turn."""
     messages = record.get("messages") or []
     goal = first_user_text(messages)
 
@@ -158,7 +158,7 @@ def walk_trajectory(record: Dict[str, Any], *, max_obs_chars: int, max_history_c
     return goal, obs_histories, action_tokens, final_answer, len(action_tokens)
 
 
-def signature_set(action_tokens: Sequence[str], final_answer: str, *, answer_shingle: int) -> FrozenSet[str]:
+def fingerprint(action_tokens: Sequence[str], final_answer: str, *, answer_shingle: int) -> FrozenSet[str]:
     """A trajectory's dedup fingerprint: its action tokens + answer word-shingles."""
     tokens = set(action_tokens)
     words = re.findall(r"\w+", final_answer.lower())
@@ -241,18 +241,18 @@ def dedup_group(group: List[Dict[str, Any]], threshold: float, max_jaccard_group
     """Greedily keep the highest-quality representative of each near-dup cluster."""
     ordered = sorted(group, key=lambda m: m["quality"], reverse=True)
     if len(ordered) > max_jaccard_group:
-        # Too large for O(n^2) Jaccard: fall back to exact-signature dedup (O(n)).
+        # Too large for O(n^2) Jaccard: fall back to exact-fingerprint dedup (O(n)).
         seen: set = set()
         kept = []
         for m in ordered:
-            if m["sig"] in seen:
+            if m["fp"] in seen:
                 continue
-            seen.add(m["sig"])
+            seen.add(m["fp"])
             kept.append(m)
         return kept
     kept: List[Dict[str, Any]] = []
     for m in ordered:
-        if any(jaccard(m["sig"], k["sig"]) >= threshold for k in kept):
+        if any(jaccard(m["fp"], k["fp"]) >= threshold for k in kept):
             continue
         kept.append(m)
     return kept
@@ -282,10 +282,10 @@ def main() -> int:
     ap.add_argument("--device", default=None, help="cuda|cpu (default: auto).")
     ap.add_argument("--max-obs-chars", type=int, default=4000)
     ap.add_argument("--max-history-chars", type=int, default=8000)
-    ap.add_argument("--arg-chars", type=int, default=60, help="Per-action arg chars kept in the signature.")
-    ap.add_argument("--answer-shingle", type=int, default=5, help="Answer word-shingle size for the signature.")
+    ap.add_argument("--arg-chars", type=int, default=60, help="Per-action arg chars kept in the fingerprint.")
+    ap.add_argument("--answer-shingle", type=int, default=5, help="Answer word-shingle size for the fingerprint.")
     ap.add_argument("--max-jaccard-group", type=int, default=3000,
-                    help="Groups larger than this fall back to exact-signature dedup.")
+                    help="Groups larger than this fall back to exact-fingerprint dedup.")
     args = ap.parse_args()
 
     if args.keep_frac is not None and args.keep_k is not None:
@@ -297,7 +297,7 @@ def main() -> int:
 
     scorer = None if args.no_importance else load_bert_scorer(args.model_type, args.device)
 
-    # --- Pass 1: extract per-trajectory quality + signature (lightweight metadata only) ---
+    # --- Pass 1: extract per-trajectory quality + fingerprint (lightweight metadata only) ---
     metas: List[Dict[str, Any]] = []
     n_read = n_dropped_steps = 0
     pending: List[Dict[str, Any]] = []   # buffered trajectories awaiting a GPU flush
@@ -313,7 +313,7 @@ def main() -> int:
         else:
             quals = [float(p["n_steps"]) for p in pending]   # length proxy when importance is off
         for p, q in zip(pending, quals):
-            metas.append({"gid": p["gid"], "task": p["task"], "sig": p["sig"], "quality": q})
+            metas.append({"gid": p["gid"], "task": p["task"], "fp": p["fp"], "quality": q})
         pending.clear()
 
     gid = 0
@@ -330,8 +330,8 @@ def main() -> int:
                 n_dropped_steps += 1
                 continue
             task = str(rec.get(args.task_field) or goal or "<no_task>")
-            sig = signature_set(actions, answer, answer_shingle=args.answer_shingle)
-            pending.append({"gid": this_gid, "task": task, "sig": sig, "goal": goal,
+            fp = fingerprint(actions, answer, answer_shingle=args.answer_shingle)
+            pending.append({"gid": this_gid, "task": task, "fp": fp, "goal": goal,
                             "histories": histories, "n_steps": n_steps})
             if len(pending) >= args.score_chunk:
                 flush_pending()

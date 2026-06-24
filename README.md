@@ -61,7 +61,7 @@ Scripts (mirror the conventions of our `tads/scripts`):
 | `scripts/install.sh` | create the 3 venvs (vLLM / AgentLab / bert-score / the trainer have conflicting deps) |
 | `scripts/download_models.sh` · `download_data.sh` | base checkpoints + training data → group-volume |
 | `scripts/run_select.sh` | re-run selection (`prune_axtree`→`prepare_scores`→`select_greedy`→`postprocess`) |
-| `weasel/select_clean.py` | **alternative** one-pass curation for native function-calling exports (1 line = 1 trajectory): step-level BERTScore φ importance + trajectory-level signature dedup → original schema, no convert round-trip |
+| `weasel/select_clean.py` | **alternative** one-pass curation for native function-calling exports (1 line = 1 trajectory): step-level BERTScore φ importance + trajectory-level fingerprint dedup → original schema, no convert round-trip |
 | `scripts/run_train.sh` + `train_lora_sft.py` | 8×A100 standalone LoRA SFT — transformers+peft, no LLaMA-Factory (`--gpus`/`--parallel`, constant global batch) |
 | `scripts/run_merge.sh` + `merge_lora.py` · `serve_vllm.sh` | merge LoRA + serve for eval |
 | `scripts/run_eval.sh` + `agentlab_eval.py` | AgentLab/BrowserGym eval (`--bench miniwob\|webarena\|workarena_l1\|workarena_l2`) |
@@ -136,8 +136,8 @@ It keeps each WEASEL signal at the granularity that fits this data shape:
   `phi_t = max(0, r_t − r_{t-1})`, aggregated to a per-trajectory quality
   (`mean(phi)`, or final `r_T`). Read straight from the raw messages, so BERTScore
   stays on short step text (its valid regime).
-- **dedup** — *trajectory level*: each trajectory → a short **signature** (its action
-  sequence + answer word-shingles); group by task, drop near-duplicate signatures
+- **dedup** — *trajectory level*: each trajectory → a short **fingerprint** (its action
+  sequence + answer word-shingles); group by task, drop near-duplicate fingerprints
   (Jaccard ≥ threshold), keep the highest-quality representative. `O(N)` — no
   whole-trajectory BERTScore (which collapses on the shared 65k-char system prompt),
   no global all-pairs.
