@@ -37,7 +37,9 @@ training dataset, it will be available here:
 
 Scripted full stack for an 8×A100 80GB VM. Everything heavy goes to
 `/group-volume`; `/user-volume` (`$HOME`) holds only this checkout. Full details
-and per-benchmark notes are in **[SETUP.md](SETUP.md)**.
+and per-benchmark notes are in **[SETUP.md](SETUP.md)**. On a plain cloud GPU VM
+without that mount, first read **[Generic cloud VM](#generic-cloud-vm-no-group-volume-mount)**
+below — it is a one-line workspace override plus the system packages a fresh image needs.
 
 ```bash
 git clone -b dev git@github.com:33modeling/weasel.git
@@ -70,6 +72,58 @@ Scripts (mirror the conventions of our `tads/scripts`):
 
 > The manual per-step commands below are still valid; the Quickstart just wraps
 > them with cluster-aware paths and venvs.
+
+### Generic cloud VM (no `/group-volume` mount)
+
+The Quickstart assumes the managed cluster's `/group-volume`. On a plain GPU VM
+(AWS / GCP / Lambda / RunPod, fresh Ubuntu) there is no such mount — point the
+workspace at whatever large disk you have and every other path derives from it:
+
+```bash
+export WEASEL_WORK=/workspace/weasel      # or /mnt/data/weasel, ~/weasel-work — any disk with room
+echo 'export WEASEL_WORK=/workspace/weasel' >> ~/.bashrc   # so new shells / tmux windows inherit it
+source scripts/setup_env.sh               # derives venvs/models/data/HF-cache under $WEASEL_WORK
+```
+
+`setup_env.sh` only **warns** that `/group-volume` is absent — harmless once
+`WEASEL_WORK` is set. (Equivalently, `export GROUP_VOLUME=/mnt/data` and keep the
+default `$GROUP_VOLUME/$USER/weasel` layout.) Everything else in the Quickstart is
+unchanged.
+
+**1. System packages** (once, needs root — most GPU images already ship the NVIDIA driver + CUDA):
+
+```bash
+sudo apt-get update && sudo apt-get install -y git git-lfs python3-venv build-essential tmux
+nvidia-smi                                # confirm the driver sees your GPUs before installing torch
+```
+The **eval** venv drives a real Chromium (BrowserGym/Playwright); `bash scripts/install.sh eval`
+runs `playwright install-deps`, which needs root. No root? use the `WEASEL_XLIBS_DIR`
+no-root path documented in `scripts/setup_env.sh`.
+
+**2. Fewer than 8 GPUs.** Every stage takes `--gpus`, and the paper recipe holds the
+global batch constant, so results match on any count. On 1–2 cards or 24GB VRAM, use
+the memory knobs (full detail in [SETUP.md](SETUP.md)): `--qlora` (4-bit base) / `--liger` (fused CE).
+
+```bash
+bash scripts/run_train.sh --gpus 0                 # single GPU
+QLORA=1 CUTOFF=32768 bash scripts/run_train.sh --gpus 0,1   # 2× 24GB (e.g. RTX 4090)
+```
+
+**3. Keep serve + eval alive across SSH drops.** vLLM serves on `127.0.0.1:8000`
+(local only — no firewall port to open) and eval connects to it. Run each in its own
+`tmux` window so a disconnect doesn't kill the process:
+
+```bash
+tmux new -s serve 'source scripts/setup_env.sh && bash scripts/serve_vllm.sh qwen25 --gpus 0'  # detach: Ctrl-b d
+tmux new -s eval  'source scripts/setup_env.sh && bash scripts/run_eval.sh --bench miniwob'
+```
+
+**4. Disk budget.** All four base models + merged outputs + the 3 venvs + HF cache
+live under `$WEASEL_WORK`. Budget **≥200GB** for the full set; **~60GB** is enough for
+one model end-to-end (one base + one merged variant + venvs). Prefer a fast NVMe scratch
+disk — model load and checkpoint writes are I/O-bound. On instances whose local storage is
+**ephemeral**, copy final adapters/merged models/eval results off `$WEASEL_WORK` before
+terminating.
 
 ## 0. AXTree Pruning
 
